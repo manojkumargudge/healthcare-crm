@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hcp_user
+      POSTGRES_PASSWORD: hcp_pass
+      POSTGRES_DB: hcp_crm
+    ports:
+      - "5432:5432"
+    volumes:
+      - hcp_pg_data:/var/lib/postgresql/data
+
+volumes:
+  hcp_pg_data:
