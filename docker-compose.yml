@@ -1,7 +1,21 @@
 version: "3.9"
+
 services:
+  backend:
+    build:
+      context: ./backend
+    container_name: healthcare-crm-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+
   postgres:
     image: postgres:16-alpine
+    container_name: healthcare-crm-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: hcp_user
