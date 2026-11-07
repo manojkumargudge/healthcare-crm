@@ -70,11 +70,11 @@ IMPORTANT:
                         }
                     )
             if m.content:
-                final_reply = m.content  # type: ignore[assignment]
+                final_reply = m.content  # type: ignore[assignment]  # BaseMessage.content is str | list; Groq returns str here
 
         if isinstance(m, ToolMessage) and m.name == "log_interaction":
             try:
-                data = json.loads(m.content)  # type: ignore[arg-type]
+                data = json.loads(m.content)  # type: ignore[arg-type]  # ToolMessage.content is str | list; our tools always return a JSON str
                 logged_interaction_id = data.get("interaction_id")
             except Exception:
                 pass

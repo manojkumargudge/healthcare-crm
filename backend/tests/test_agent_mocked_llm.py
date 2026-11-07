@@ -118,7 +118,7 @@ async def test_log_interaction_tool_persists_extracted_fields(db: AsyncSession, 
         )
     )
     tool = next(t for t in build_tools(db) if t.name == "log_interaction")
-    out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="Met Dr Rao, 3 samples"))  # type: ignore[misc]
+    out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="Met Dr Rao, 3 samples"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
 
     assert out["status"] == "logged"
     assert len(fake.calls) == 1
@@ -136,7 +136,7 @@ async def test_log_interaction_tool_persists_extracted_fields(db: AsyncSession, 
 async def test_log_interaction_tool_unknown_hcp_skips_llm(db: AsyncSession, fake_llm) -> None:
     fake = fake_llm()
     tool = next(t for t in build_tools(db) if t.name == "log_interaction")
-    out = json.loads(await tool.coroutine(hcp_id="missing", raw_text="x"))  # type: ignore[misc]
+    out = json.loads(await tool.coroutine(hcp_id="missing", raw_text="x"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     assert out == {"error": "No HCP found with id missing"}
     assert fake.calls == []
 

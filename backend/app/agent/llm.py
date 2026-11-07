@@ -77,7 +77,7 @@ async def ainvoke_resilient(messages, temperature: float = 0.2, tools=None, heav
     for model_name in chain:
         llm = ChatGroq(api_key=settings.groq_api_key, model=model_name, temperature=temperature)
         if tools:
-            llm = llm.bind_tools(tools)  # type: ignore[assignment]
+            llm = llm.bind_tools(tools)  # type: ignore[assignment]  # bind_tools returns a Runnable, not ChatGroq; only .ainvoke is used after
         try:
             response = await llm.ainvoke(messages)
             return response, model_name

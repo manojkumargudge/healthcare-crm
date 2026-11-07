@@ -20,6 +20,22 @@ TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://hcp_user:hcp_pass@localhost:5432/hcp_crm_test",
 )
+
+# Safety guard: the suite drops and recreates every table, so refuse to run
+# against anything that isn't clearly a throwaway test database.
+from sqlalchemy.engine import make_url  # noqa: E402
+
+try:
+    _test_db_name = make_url(TEST_DATABASE_URL).database or ""
+except Exception as exc:  # malformed URL
+    pytest.exit(f"Refusing to run: TEST_DATABASE_URL is not a valid database URL ({exc}).", returncode=4)
+if not _test_db_name.endswith("_test"):
+    pytest.exit(
+        f"Refusing to run: TEST_DATABASE_URL database name {_test_db_name!r} must end with '_test' "
+        "(the suite drops and recreates all tables).",
+        returncode=4,
+    )
+
 # Env vars take precedence over backend/.env in pydantic-settings, so a
 # developer's real key in .env is never picked up by the test run.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL

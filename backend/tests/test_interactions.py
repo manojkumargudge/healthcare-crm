@@ -154,7 +154,7 @@ async def test_create_with_null_qty_does_not_500(client: httpx.AsyncClient, hcp:
     assert resp.status_code in (201, 422), resp.text
 
 
-@pytest.mark.xfail(strict=True, reason="BUG-2 (suspected): PATCH /api/interactions/{id} updates samples_dropped via edit_interaction but never re-runs check_sample_compliance, so compliance_flag/compliance_notes go stale after an edit.")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="BUG-2 (suspected): PATCH /api/interactions/{id} updates samples_dropped via edit_interaction but never re-runs check_sample_compliance, so compliance_flag/compliance_notes go stale after an edit.")
 async def test_patch_samples_reruns_compliance(client: httpx.AsyncClient, make_hcp) -> None:
     vt = await make_hcp(name="Dr. VT", state="Vermont")  # limit 0
     created = (await _create(client, hcp_id=vt["id"])).json()
