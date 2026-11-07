@@ -35,17 +35,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import HCP, Interaction, FollowUp
 from app.agent.llm import ainvoke_resilient
+from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
 
-# ---------------------------------------------------------------------------
-# Simplified compliance ruleset (state -> max samples per product per visit).
-# In a real system this would be pulled from a regulatory/compliance service.
-# ---------------------------------------------------------------------------
-STATE_SAMPLE_LIMITS = {
-    "default": 4,
-    "california": 2,
-    "vermont": 0,  # Vermont restricts pharma sample/gift programs heavily
-    "minnesota": 2,
-}
+__all__ = ["STATE_SAMPLE_LIMITS", "build_tools", "apply_compliance"]
+
+
+def apply_compliance(interaction: Interaction, hcp: HCP) -> None:
+    """Set compliance_flag/notes on `interaction` from its samples (no commit).
+
+    No samples -> not flagged and no notes, matching what create has always
+    stored for sample-free interactions.
+    """
+    if interaction.samples_dropped:
+        result = evaluate_sample_compliance(hcp.state, interaction.samples_dropped)
+        interaction.compliance_flag = result["compliance_flag"]
+        interaction.compliance_notes = result["compliance_notes"]
+    else:
+        interaction.compliance_flag = False
+        interaction.compliance_notes = None  # type: ignore[assignment]  # column is nullable=True but annotated Mapped[str]
 
 
 def _extract_json(text: str) -> dict:
@@ -105,7 +112,7 @@ Notes:
             channel="chat",
             interaction_date=date.today(),
             products_discussed=data.get("products_discussed", []),
-            samples_dropped=data.get("samples_dropped", []),
+            samples_dropped=coerce_samples(data.get("samples_dropped", []), source="log_interaction"),
             materials_shared=data.get("materials_shared", []),
             key_topics=data.get("key_topics", []),
             hcp_sentiment=data.get("hcp_sentiment"),
@@ -146,6 +153,9 @@ Notes:
             "interaction_type", "products_discussed", "samples_dropped",
             "materials_shared", "key_topics", "raw_notes", "hcp_sentiment",
         }
+        if "samples_dropped" in update_dict:
+            update_dict["samples_dropped"] = coerce_samples(update_dict["samples_dropped"], source="edit_interaction")
+
         before = {}
         changed = {}
         for field, value in update_dict.items():
@@ -153,6 +163,13 @@ Notes:
                 before[field] = getattr(interaction, field)
                 setattr(interaction, field, value)
                 changed[field] = value
+
+        if "samples_dropped" in changed:
+            hcp = await db.get(HCP, interaction.hcp_id)
+            if hcp is None:  # FK makes this unreachable; fail without saving rather than guess
+                await db.rollback()
+                return json.dumps({"error": f"No HCP found with id {interaction.hcp_id}"})
+            apply_compliance(interaction, hcp)
 
         history = list(interaction.edit_history or [])
         history.append({
@@ -167,11 +184,15 @@ Notes:
         await db.commit()
         await db.refresh(interaction)
 
-        return json.dumps({
+        result: dict = {
             "status": "updated",
             "interaction_id": interaction.id,
             "changed_fields": list(changed.keys()),
-        })
+        }
+        if "samples_dropped" in changed:
+            result["compliance_flag"] = interaction.compliance_flag
+            result["compliance_notes"] = interaction.compliance_notes
+        return json.dumps(result)
 
     # ---- 3. GET HCP CONTEXT --------------------------------------------------
     class GetHCPContextArgs(BaseModel):
@@ -220,26 +241,12 @@ Notes:
         except json.JSONDecodeError:
             return json.dumps({"error": "samples_dropped must be a valid JSON list string"})
 
-        state_key = (hcp.state or "default").strip().lower()
-        limit = STATE_SAMPLE_LIMITS.get(state_key, STATE_SAMPLE_LIMITS["default"])
-
-        violations = []
-        for s in samples:
-            qty = s.get("qty", 0)
-            if qty > limit:
-                violations.append(
-                    f"{s.get('product', 'Unknown product')}: {qty} units exceeds the "
-                    f"{limit}-unit limit for {hcp.state or 'this state'}"
-                )
-
-        flagged = len(violations) > 0
-        notes = "; ".join(violations) if violations else "No compliance issues detected."
-
-        return json.dumps({
-            "compliance_flag": flagged,
-            "compliance_notes": notes,
-            "state_limit_applied": limit,
-        })
+        if not isinstance(samples, list):
+            return json.dumps({"error": "samples_dropped must be a valid JSON list string"})
+        # Items are checked individually: a malformed qty is skipped with a
+        # warning instead of crashing; a missing product still reports as
+        # "Unknown product" so the violation isn't lost.
+        return json.dumps(evaluate_sample_compliance(hcp.state, [s for s in samples if isinstance(s, dict)]))
 
     # ---- 5. SCHEDULE FOLLOW-UP -----------------------------------------------
     class ScheduleFollowUpArgs(BaseModel):

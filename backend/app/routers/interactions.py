@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Interaction
 from app.schemas import InteractionCreate, InteractionUpdate, InteractionOut
-from app.agent.tools import build_tools
+from app.agent.tools import apply_compliance, build_tools
 from app.models import HCP
 
 router = APIRouter(prefix="/api/interactions", tags=["Interactions"])
@@ -35,22 +35,14 @@ async def create_interaction(payload: InteractionCreate, db: AsyncSession = Depe
     if not data.get("interaction_date"):
         data["interaction_date"] = date_cls.today()
     interaction = Interaction(**data)
+
+    # Compliance is evaluated before anything is written, so the row and its
+    # compliance result land in one commit; if the check raises, nothing is saved.
+    apply_compliance(interaction, hcp)
+
     db.add(interaction)
     await db.commit()
     await db.refresh(interaction)
-
-    if interaction.samples_dropped:
-        tools = build_tools(db)
-        compliance_tool = next(t for t in tools if t.name == "check_sample_compliance")
-        raw = await compliance_tool.coroutine(  # type: ignore[misc]  # StructuredTool.coroutine is Optional; set for every tool in build_tools
-            hcp_id=interaction.hcp_id,
-            samples_dropped=json.dumps(interaction.samples_dropped),
-        )
-        result = json.loads(raw)
-        interaction.compliance_flag = result.get("compliance_flag", False)
-        interaction.compliance_notes = result.get("compliance_notes")
-        await db.commit()
-        await db.refresh(interaction)
 
     return interaction
 

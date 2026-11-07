@@ -2,6 +2,8 @@ from datetime import date, datetime
 from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
+from app.samples import SampleDrop
+
 
 class HCPBase(BaseModel):
     name: str
@@ -29,7 +31,7 @@ class InteractionCreate(BaseModel):
     channel: str = "form"
     interaction_date: Optional[date] = None
     products_discussed: list[str] = []
-    samples_dropped: list[dict] = []
+    samples_dropped: list[SampleDrop] = []
     materials_shared: list[str] = []
     key_topics: list[str] = []
     raw_notes: Optional[str] = None
@@ -38,7 +40,7 @@ class InteractionCreate(BaseModel):
 class InteractionUpdate(BaseModel):
     interaction_type: Optional[str] = None
     products_discussed: Optional[list[str]] = None
-    samples_dropped: Optional[list[dict]] = None
+    samples_dropped: Optional[list[SampleDrop]] = None
     materials_shared: Optional[list[str]] = None
     key_topics: Optional[list[str]] = None
     raw_notes: Optional[str] = None
