@@ -70,11 +70,11 @@ IMPORTANT:
                         }
                     )
             if m.content:
-                final_reply = m.content
+                final_reply = m.content  # type: ignore[assignment]
 
         if isinstance(m, ToolMessage) and m.name == "log_interaction":
             try:
-                data = json.loads(m.content)
+                data = json.loads(m.content)  # type: ignore[arg-type]
                 logged_interaction_id = data.get("interaction_id")
             except Exception:
                 pass

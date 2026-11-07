@@ -1,0 +1,39 @@
+# Tooling config only — the app itself is still installed via requirements.txt.
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+# Ruff defaults (pycodestyle errors + pyflakes) plus a few low-noise bug-catchers.
+select = ["E4", "E7", "E9", "F", "B", "ASYNC"]
+ignore = [
+    "B008",  # FastAPI's `Depends(...)` in defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["app", "tests"]
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+# Existing code is largely unannotated; start lenient and tighten per-module later.
+check_untyped_defs = false
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "db: needs a reachable Postgres (TEST_DATABASE_URL)",
+]
+filterwarnings = [
+    # FastAPI's on_event + datetime.utcnow deprecations live in app code we're not changing here.
+    "ignore::DeprecationWarning",
+]

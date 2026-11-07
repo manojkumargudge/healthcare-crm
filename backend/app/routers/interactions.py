@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Interaction
 from app.schemas import InteractionCreate, InteractionUpdate, InteractionOut
-from app.agent.tools import build_tools, STATE_SAMPLE_LIMITS
+from app.agent.tools import build_tools
 from app.models import HCP
 
 router = APIRouter(prefix="/api/interactions", tags=["Interactions"])
@@ -42,7 +42,7 @@ async def create_interaction(payload: InteractionCreate, db: AsyncSession = Depe
     if interaction.samples_dropped:
         tools = build_tools(db)
         compliance_tool = next(t for t in tools if t.name == "check_sample_compliance")
-        raw = await compliance_tool.coroutine(
+        raw = await compliance_tool.coroutine(  # type: ignore[misc]
             hcp_id=interaction.hcp_id,
             samples_dropped=json.dumps(interaction.samples_dropped),
         )
@@ -60,7 +60,7 @@ async def update_interaction(interaction_id: str, payload: InteractionUpdate, db
     tools = build_tools(db)
     edit_tool = next(t for t in tools if t.name == "edit_interaction")
     updates = {k: v for k, v in payload.model_dump(exclude={"edited_by", "edit_reason"}).items() if v is not None}
-    raw = await edit_tool.coroutine(
+    raw = await edit_tool.coroutine(  # type: ignore[misc]
         interaction_id=interaction_id,
         updates=json.dumps(updates),
         edit_reason=payload.edit_reason,
