@@ -1,0 +1,105 @@
+// Smoke tests: one per Redux slice. The API client is mocked, so nothing hits the network.
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { configureStore } from '@reduxjs/toolkit'
+
+vi.mock('../api/client', () => ({
+  api: {
+    listHcps: vi.fn(),
+    listInteractions: vi.fn(),
+    createInteraction: vi.fn(),
+    updateInteraction: vi.fn(),
+    chatTurn: vi.fn(),
+  },
+}))
+
+import { api } from '../api/client'
+import hcpReducer, { fetchHcps, selectHcp } from './hcpSlice'
+import interactionsReducer, { fetchInteractions, submitStructuredInteraction, editInteraction } from './interactionsSlice'
+import chatReducer, { sendChatMessage, resetSession } from './chatSlice'
+import draftReducer, { setDraftInteraction, updateDraftField, clearDraftInteraction } from './draftInteractionSlice'
+
+const makeStore = (reducer) => configureStore({ reducer: { s: reducer } })
+
+beforeEach(() => vi.clearAllMocks())
+
+describe('hcpSlice', () => {
+  it('loads HCPs, auto-selects the first, and supports manual selection', async () => {
+    api.listHcps.mockResolvedValue([{ id: 'h1', name: 'Dr. A' }, { id: 'h2', name: 'Dr. B' }])
+    const store = makeStore(hcpReducer)
+    expect(store.getState().s).toEqual({ items: [], selectedId: null, status: 'idle' })
+
+    await store.dispatch(fetchHcps())
+    expect(store.getState().s.status).toBe('succeeded')
+    expect(store.getState().s.items).toHaveLength(2)
+    expect(store.getState().s.selectedId).toBe('h1')
+
+    store.dispatch(selectHcp('h2'))
+    expect(store.getState().s.selectedId).toBe('h2')
+  })
+})
+
+describe('interactionsSlice', () => {
+  it('fetches, prepends a submitted interaction, and replaces an edited one', async () => {
+    api.listInteractions.mockResolvedValue([{ id: 'i1', raw_notes: 'old' }])
+    api.createInteraction.mockResolvedValue({ id: 'i2', raw_notes: 'new' })
+    api.updateInteraction.mockResolvedValue({ id: 'i1', raw_notes: 'edited' })
+    const store = makeStore(interactionsReducer)
+
+    await store.dispatch(fetchInteractions('h1'))
+    expect(api.listInteractions).toHaveBeenCalledWith('h1')
+
+    await store.dispatch(submitStructuredInteraction({ hcp_id: 'h1' }))
+    expect(store.getState().s.items.map((i) => i.id)).toEqual(['i2', 'i1'])
+    expect(store.getState().s.lastSubmitted.id).toBe('i2')
+
+    await store.dispatch(editInteraction({ id: 'i1', updates: { raw_notes: 'edited' } }))
+    expect(api.updateInteraction).toHaveBeenCalledWith('i1', { raw_notes: 'edited' })
+    expect(store.getState().s.items.find((i) => i.id === 'i1').raw_notes).toBe('edited')
+  })
+})
+
+describe('chatSlice', () => {
+  it('appends user + assistant messages and resets the session', async () => {
+    api.chatTurn.mockResolvedValue({ reply: 'Logged.', tool_calls: [{ tool: 'log_interaction' }], interaction: null })
+    const store = makeStore(chatReducer)
+    const firstSession = store.getState().s.sessionId
+    expect(firstSession).toBeTruthy()
+
+    await store.dispatch(sendChatMessage({ sessionId: firstSession, message: 'hi', hcpId: 'h1' }))
+    expect(api.chatTurn).toHaveBeenCalledWith({ session_id: firstSession, message: 'hi', hcp_id: 'h1' })
+    const { messages, status } = store.getState().s
+    expect(status).toBe('succeeded')
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+    expect(messages[1].content).toBe('Logged.')
+
+    store.dispatch(resetSession())
+    expect(store.getState().s.messages).toEqual([])
+    expect(store.getState().s.sessionId).not.toBe(firstSession)
+  })
+
+  it('records a failed turn as an error message', async () => {
+    api.chatTurn.mockRejectedValue(new Error('API 500'))
+    const store = makeStore(chatReducer)
+    await store.dispatch(sendChatMessage({ sessionId: 's', message: 'hi' }))
+    const last = store.getState().s.messages.at(-1)
+    expect(store.getState().s.status).toBe('failed')
+    expect(last.error).toBe(true)
+    expect(last.content).toContain('API 500')
+  })
+})
+
+describe('draftInteractionSlice', () => {
+  it('merges, updates a single field, and clears back to defaults', () => {
+    let state = draftReducer(undefined, { type: '@@init' })
+    expect(state.interaction_type).toBe('Visit')
+    expect(state.interaction_date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+
+    state = draftReducer(state, setDraftInteraction({ raw_notes: 'notes', products_discussed: ['A'] }))
+    state = draftReducer(state, updateDraftField({ field: 'hcp_sentiment', value: 'Positive' }))
+    expect(state).toMatchObject({ raw_notes: 'notes', products_discussed: ['A'], hcp_sentiment: 'Positive' })
+
+    state = draftReducer(state, clearDraftInteraction())
+    expect(state.raw_notes).toBe('')
+    expect(state.products_discussed).toEqual([])
+  })
+})
