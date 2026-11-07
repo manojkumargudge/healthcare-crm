@@ -18,7 +18,7 @@ import pytest
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    "postgresql+asyncpg://hcp_user:hcp_pass@localhost:5432/hcp_crm_test",
+    "postgresql+asyncpg://hcp_user:hcp_pass@127.0.0.1:5432/hcp_crm_test",
 )
 
 # Safety guard: the suite drops and recreates every table, so refuse to run
