@@ -106,14 +106,28 @@ async def test_unknown_hcp_returns_error() -> None:
     assert out == {"error": "No HCP found with id nope"}
 
 
-# ------------------------------------------------- suspected bug probes ----
-@pytest.mark.xfail(strict=True, raises=TypeError, reason="BUG-1: check_sample_compliance compares `qty > limit` without coercing/validating, so a non-int qty (string or null) raises TypeError. samples_dropped is typed list[dict], so the API accepts it.")
+# --------------------------------------- malformed qty (was BUG-1) ----
 async def test_string_qty_is_compared_numerically() -> None:
     result = await _check("California", [{"product": "A", "qty": "3"}])
     assert result["compliance_flag"] is True
+    assert result["compliance_notes"] == "A: 3 units exceeds the 2-unit limit for California"
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason="BUG-1: check_sample_compliance compares `qty > limit` without coercing/validating, so a non-int qty (string or null) raises TypeError. samples_dropped is typed list[dict], so the API accepts it.")
 async def test_null_qty_does_not_crash() -> None:
     result = await _check("California", [{"product": "A", "qty": None}])
     assert result["compliance_flag"] is False
+
+
+async def test_invalid_qty_items_are_skipped_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("WARNING", logger="hcp_crm.samples")
+    result = await _check(
+        "California",
+        [{"product": "bad", "qty": "lots"}, {"product": "neg", "qty": -9}, {"product": "ok", "qty": 3}],
+    )
+    assert result["compliance_notes"] == "ok: 3 units exceeds the 2-unit limit for California"
+    assert sum("invalid qty" in r.message for r in caplog.records) == 2
+
+
+async def test_non_list_samples_returns_error() -> None:
+    result = await _check("California", {"product": "A", "qty": 3})
+    assert result == {"error": "samples_dropped must be a valid JSON list string"}

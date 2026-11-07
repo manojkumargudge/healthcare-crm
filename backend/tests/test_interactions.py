@@ -140,21 +140,71 @@ async def test_patch_unknown_interaction_404(client: httpx.AsyncClient) -> None:
     assert resp.status_code == 404
 
 
-# ------------------------------------------------- suspected bug probes ----
-@pytest.mark.xfail(strict=True, raises=TypeError, reason="BUG-1: check_sample_compliance compares `qty > limit` without coercing/validating, so a non-int qty (string or null) raises TypeError. samples_dropped is typed list[dict], so the API accepts it. Via POST /api/interactions this surfaces as an unhandled 500, and because the route commits the interaction before running compliance, the row is persisted anyway with compliance_flag=False.")
+# --------------------------------------- sample validation (was BUG-1) ----
 async def test_create_with_string_qty_does_not_500(client: httpx.AsyncClient, hcp: dict) -> None:
-    """`samples_dropped` is typed `list[dict]`, so `{"qty": "3"}` passes validation."""
+    """Integer-valued strings are coerced (same rule the LLM path uses), not a 500."""
     resp = await _create(client, hcp_id=hcp["id"], samples_dropped=[{"product": "X", "qty": "3"}])
-    assert resp.status_code in (201, 422), resp.text
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["samples_dropped"] == [{"product": "X", "qty": 3}]
 
 
-@pytest.mark.xfail(strict=True, raises=TypeError, reason="BUG-1: check_sample_compliance compares `qty > limit` without coercing/validating, so a non-int qty (string or null) raises TypeError. samples_dropped is typed list[dict], so the API accepts it. Via POST /api/interactions this surfaces as an unhandled 500, and because the route commits the interaction before running compliance, the row is persisted anyway with compliance_flag=False.")
 async def test_create_with_null_qty_does_not_500(client: httpx.AsyncClient, hcp: dict) -> None:
     resp = await _create(client, hcp_id=hcp["id"], samples_dropped=[{"product": "X", "qty": None}])
-    assert resp.status_code in (201, 422), resp.text
+    assert resp.status_code == 422, resp.text
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="BUG-2 (suspected): PATCH /api/interactions/{id} updates samples_dropped via edit_interaction but never re-runs check_sample_compliance, so compliance_flag/compliance_notes go stale after an edit.")
+BAD_SAMPLES = [
+    pytest.param({"product": "X", "qty": "abc"}, id="non-numeric-qty"),
+    pytest.param({"product": "X", "qty": -1}, id="negative-qty"),
+    pytest.param({"product": "X", "qty": 2.5}, id="fractional-qty"),
+    pytest.param({"product": "X", "qty": True}, id="bool-qty"),
+    pytest.param({"product": "X"}, id="missing-qty"),
+    pytest.param({"product": "   ", "qty": 1}, id="blank-product"),
+    pytest.param({"qty": 1}, id="missing-product"),
+]
+
+
+@pytest.mark.parametrize("sample", BAD_SAMPLES)
+async def test_create_rejects_bad_sample_with_422_and_saves_nothing(
+    client: httpx.AsyncClient, hcp: dict, sample: dict
+) -> None:
+    resp = await _create(client, hcp_id=hcp["id"], samples_dropped=[sample])
+    assert resp.status_code == 422, resp.text
+    assert (await client.get("/api/interactions")).json() == []
+
+
+@pytest.mark.parametrize("sample", BAD_SAMPLES)
+async def test_patch_rejects_bad_sample_with_422(client: httpx.AsyncClient, hcp: dict, sample: dict) -> None:
+    created = (await _create(client, hcp_id=hcp["id"], samples_dropped=[{"product": "A", "qty": 1}])).json()
+    resp = await client.patch(f"/api/interactions/{created['id']}", json={"samples_dropped": [sample]})
+    assert resp.status_code == 422, resp.text
+    again = (await client.get(f"/api/interactions/{created['id']}")).json()
+    assert again["samples_dropped"] == [{"product": "A", "qty": 1}]
+    assert again["edit_history"] == []
+
+
+async def test_create_strips_product_whitespace(client: httpx.AsyncClient, hcp: dict) -> None:
+    resp = await _create(client, hcp_id=hcp["id"], samples_dropped=[{"product": "  CardioMax ", "qty": 0}])
+    assert resp.status_code == 201
+    assert resp.json()["samples_dropped"] == [{"product": "CardioMax", "qty": 0}]
+
+
+# ------------------------------------------- create is one transaction ----
+async def test_failed_compliance_on_create_leaves_no_row(
+    client: httpx.AsyncClient, hcp: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_a: Any, **_kw: Any) -> None:
+        raise RuntimeError("compliance service exploded")
+
+    monkeypatch.setattr("app.routers.interactions.apply_compliance", _boom)
+    with pytest.raises(RuntimeError, match="compliance service exploded"):
+        await _create(client, hcp_id=hcp["id"], samples_dropped=[{"product": "A", "qty": 1}])
+
+    monkeypatch.undo()
+    assert (await client.get("/api/interactions")).json() == []
+
+
+# -------------------------------------- PATCH re-runs compliance (BUG-2) ----
 async def test_patch_samples_reruns_compliance(client: httpx.AsyncClient, make_hcp) -> None:
     vt = await make_hcp(name="Dr. VT", state="Vermont")  # limit 0
     created = (await _create(client, hcp_id=vt["id"])).json()
@@ -168,3 +218,27 @@ async def test_patch_samples_reruns_compliance(client: httpx.AsyncClient, make_h
     ).json()
     assert body["samples_dropped"] == [{"product": "DrugX", "qty": 5}]
     assert body["compliance_flag"] is True
+    assert body["compliance_notes"] == "DrugX: 5 units exceeds the 0-unit limit for Vermont"
+
+
+async def test_patch_samples_can_clear_a_flag(client: httpx.AsyncClient, make_hcp) -> None:
+    ca = await make_hcp(name="Dr. CA", state="California")  # limit 2
+    created = (await _create(client, hcp_id=ca["id"], samples_dropped=[{"product": "A", "qty": 5}])).json()
+    assert created["compliance_flag"] is True
+
+    body = (await client.patch(f"/api/interactions/{created['id']}", json={"samples_dropped": [{"product": "A", "qty": 2}]})).json()
+    assert body["compliance_flag"] is False
+    assert body["compliance_notes"] == "No compliance issues detected."
+
+    body = (await client.patch(f"/api/interactions/{created['id']}", json={"samples_dropped": []})).json()
+    assert body["samples_dropped"] == []
+    assert body["compliance_flag"] is False
+    assert body["compliance_notes"] is None  # same as a sample-free create
+
+
+async def test_patch_without_samples_leaves_compliance_alone(client: httpx.AsyncClient, make_hcp) -> None:
+    ca = await make_hcp(name="Dr. CA", state="California")
+    created = (await _create(client, hcp_id=ca["id"], samples_dropped=[{"product": "A", "qty": 5}])).json()
+    body = (await client.patch(f"/api/interactions/{created['id']}", json={"raw_notes": "x"})).json()
+    assert body["compliance_flag"] is True
+    assert body["compliance_notes"] == created["compliance_notes"]

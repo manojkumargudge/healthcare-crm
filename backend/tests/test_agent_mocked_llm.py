@@ -178,3 +178,83 @@ async def test_chat_turn_with_tool_call(client: httpx.AsyncClient, hcp: dict, fa
     history = (await client.get("/api/chat/s-1/history")).json()
     assert [h["role"] for h in history] == ["user", "tool", "assistant"]
     assert history[0]["content"] == "quick call"  # stored without the injected HCP instructions
+
+
+async def test_log_interaction_tool_coerces_and_skips_bad_llm_samples(
+    db: AsyncSession, fake_llm, caplog: pytest.LogCaptureFixture
+) -> None:
+    hcp = HCP(name="Dr. Rao", state="Karnataka")
+    db.add(hcp)
+    await db.commit()
+    fake_llm(
+        json.dumps(
+            {
+                "summary": "s",
+                "samples_dropped": [
+                    {"product": "Good", "qty": "3"},  # coerced -> 3
+                    {"product": "NoQty", "qty": None},  # skipped
+                    {"product": "", "qty": 1},  # skipped
+                    {"product": "Neg", "qty": -2},  # skipped
+                    "garbage",  # skipped
+                ],
+            }
+        )
+    )
+    caplog.set_level("WARNING", logger="hcp_crm.samples")
+    tool = next(t for t in build_tools(db) if t.name == "log_interaction")
+    out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="notes"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+
+    assert out["samples_dropped"] == [{"product": "Good", "qty": 3}]
+    row = await db.get(Interaction, out["interaction_id"])
+    assert row is not None and row.samples_dropped == [{"product": "Good", "qty": 3}]
+    skipped = [r for r in caplog.records if "log_interaction: skipping invalid sample" in r.message]
+    assert len(skipped) == 4
+
+
+async def test_log_interaction_tool_tolerates_non_list_samples(db: AsyncSession, fake_llm) -> None:
+    hcp = HCP(name="Dr. Rao")
+    db.add(hcp)
+    await db.commit()
+    fake_llm(json.dumps({"summary": "s", "samples_dropped": "three boxes"}))
+    tool = next(t for t in build_tools(db) if t.name == "log_interaction")
+    out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="notes"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+    assert out["samples_dropped"] == []
+
+
+async def test_edit_interaction_tool_reruns_compliance(db: AsyncSession) -> None:
+    hcp = HCP(name="Dr. VT", state="Vermont")
+    db.add(hcp)
+    await db.commit()
+    row = Interaction(hcp_id=hcp.id, samples_dropped=[], compliance_flag=False)
+    db.add(row)
+    await db.commit()
+
+    tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
+    out = json.loads(
+        await tool.coroutine(  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+            interaction_id=row.id,
+            updates=json.dumps({"samples_dropped": [{"product": "X", "qty": "2"}, {"product": "Bad", "qty": "?"}]}),
+        )
+    )
+    assert out["changed_fields"] == ["samples_dropped"]
+    assert out["compliance_flag"] is True
+    assert out["compliance_notes"] == "X: 2 units exceeds the 0-unit limit for Vermont"
+
+    await db.refresh(row)
+    assert row.samples_dropped == [{"product": "X", "qty": 2}]  # bad item skipped, string coerced
+    assert row.compliance_flag is True
+
+
+async def test_edit_interaction_tool_without_samples_skips_compliance(db: AsyncSession) -> None:
+    hcp = HCP(name="Dr. VT", state="Vermont")
+    db.add(hcp)
+    await db.commit()
+    row = Interaction(hcp_id=hcp.id, samples_dropped=[{"product": "X", "qty": 1}], compliance_flag=True, compliance_notes="n")
+    db.add(row)
+    await db.commit()
+
+    tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
+    out = json.loads(await tool.coroutine(interaction_id=row.id, updates=json.dumps({"raw_notes": "x"})))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+    assert "compliance_flag" not in out
+    await db.refresh(row)
+    assert (row.compliance_flag, row.compliance_notes) == (True, "n")
