@@ -20,3 +20,6 @@ dist/
 .vscode/
 .idea/
 VIDEO_SCRIPT.md
+
+# Local database dumps (may contain real data)
+backups/

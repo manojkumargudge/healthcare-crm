@@ -143,3 +143,44 @@ async def test_timestamptz_migration_converts_legacy_naive_columns(_schema: None
         value = (await conn.exec_driver_sql("SELECT created_at FROM hcps WHERE id = 'h1'")).scalar_one()
         assert value == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
         await conn.exec_driver_sql("DROP SCHEMA legacy_mig CASCADE")
+
+
+async def test_timestamptz_migration_preserves_naive_utc_values_exactly(_schema: None) -> None:
+    """Every migrated column: a naive UTC wall-clock value becomes the same instant in UTC,
+    to the microsecond, regardless of the session time zone used to run or read it."""
+    naive = datetime(2025, 12, 31, 23, 59, 58, 123456)  # near a date boundary, with microseconds
+    columns = [
+        ("hcps", "created_at"),
+        ("interactions", "created_at"),
+        ("interactions", "updated_at"),
+        ("follow_ups", "created_at"),
+        ("chat_messages", "created_at"),
+    ]
+    sql = MIGRATION.read_text(encoding="utf-8")
+    async with test_engine.begin() as conn:
+        await conn.exec_driver_sql("DROP SCHEMA IF EXISTS legacy_vals CASCADE")
+        await conn.exec_driver_sql("CREATE SCHEMA legacy_vals")
+        await conn.exec_driver_sql("SET LOCAL search_path TO legacy_vals")
+        await conn.exec_driver_sql("CREATE TABLE hcps (created_at timestamp)")
+        await conn.exec_driver_sql("CREATE TABLE interactions (created_at timestamp, updated_at timestamp)")
+        await conn.exec_driver_sql("CREATE TABLE follow_ups (created_at timestamp)")
+        await conn.exec_driver_sql("CREATE TABLE chat_messages (created_at timestamp)")
+        for table, column in columns:
+            await conn.exec_driver_sql(f"INSERT INTO {table} ({column}) VALUES ($1)", (naive,))
+
+        await conn.exec_driver_sql("SET LOCAL TIME ZONE 'America/Los_Angeles'")  # hostile session TZ
+        await conn.exec_driver_sql(sql)
+
+        expected = naive.replace(tzinfo=timezone.utc)
+        for table, column in columns:
+            got = (await conn.exec_driver_sql(f"SELECT {column} FROM {table} WHERE {column} IS NOT NULL")).scalar_one()
+            assert got == expected, f"{table}.{column}: {got!r} != {expected!r}"
+            # Same wall-clock digits when rendered in UTC: the value is unchanged, only typed.
+            utc_text = (
+                await conn.exec_driver_sql(
+                    f"SELECT to_char({column} AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US') FROM {table} "
+                    f"WHERE {column} IS NOT NULL"
+                )
+            ).scalar_one()
+            assert utc_text == "2025-12-31 23:59:58.123456", f"{table}.{column}"
+        await conn.exec_driver_sql("DROP SCHEMA legacy_vals CASCADE")

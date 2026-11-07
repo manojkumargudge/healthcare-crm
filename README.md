@@ -221,7 +221,7 @@ Open `http://localhost:5173`.
 ## Recording the demo video
 
 See [`VIDEO_SCRIPT.md`](./VIDEO_SCRIPT.md) for a beat-by-beat shotlist
-covering the frontend walkthrough, a live demo of all 6 tools, and the code
+covering the frontend walkthrough, an on-camera demo of all 6 tools running locally, and the code
 explanation, timed to fit the 10–15 minute requirement.
 
 ## The LangGraph agent
