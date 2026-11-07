@@ -25,7 +25,7 @@ Interaction and Edit Interaction -- are mandatory per the task brief):
                               rep should do next with this HCP.
 """
 import json
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Optional
 
 from langchain_core.tools import StructuredTool
@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import HCP, Interaction, FollowUp
+from app.models import HCP, Interaction, FollowUp, utcnow
 from app.agent.llm import ainvoke_resilient
 from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
 
@@ -173,13 +173,13 @@ Notes:
 
         history = list(interaction.edit_history or [])
         history.append({
-            "edited_at": datetime.utcnow().isoformat(),
+            "edited_at": utcnow().isoformat(),
             "reason": edit_reason,
             "before": before,
             "after": changed,
         })
         interaction.edit_history = history
-        interaction.updated_at = datetime.utcnow()
+        interaction.updated_at = utcnow()
 
         await db.commit()
         await db.refresh(interaction)

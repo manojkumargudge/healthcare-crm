@@ -34,6 +34,6 @@ markers = [
     "db: needs a reachable Postgres (TEST_DATABASE_URL)",
 ]
 filterwarnings = [
-    # FastAPI's on_event + datetime.utcnow deprecations live in app code we're not changing here.
-    "ignore::DeprecationWarning",
+    # Our own code must not trigger deprecations; third-party ones are tolerated.
+    "error::DeprecationWarning:app.*",
 ]

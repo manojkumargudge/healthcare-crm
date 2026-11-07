@@ -1,8 +1,13 @@
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from sqlalchemy import String, Text, Date, DateTime, ForeignKey, JSON, Float, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
+
+
+def utcnow() -> datetime:
+    """Timezone-aware current UTC time."""
+    return datetime.now(timezone.utc)
 
 
 def gen_uuid() -> str:
@@ -21,7 +26,7 @@ class HCP(Base):
     phone: Mapped[str] = mapped_column(String(30), nullable=True)
     state: Mapped[str] = mapped_column(String(50), nullable=True)  # used for compliance tool
     tier: Mapped[str] = mapped_column(String(20), default="B")  # A/B/C prescriber tier
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     interactions: Mapped[list["Interaction"]] = relationship(back_populates="hcp", cascade="all, delete-orphan")
 
@@ -52,8 +57,8 @@ class Interaction(Base):
     compliance_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     compliance_notes: Mapped[str] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     edit_history: Mapped[list] = mapped_column(JSON, default=list)  # audit trail of edits
 
     hcp: Mapped["HCP"] = relationship(back_populates="interactions")
@@ -69,7 +74,7 @@ class FollowUp(Base):
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="Pending")  # Pending/Done/Cancelled
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ChatMessage(Base):
@@ -81,4 +86,4 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(20))  # user/assistant/tool
     content: Mapped[str] = mapped_column(Text)
     tool_name: Mapped[str] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

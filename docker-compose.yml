@@ -1,4 +1,5 @@
-version: "3.9"
+# Credentials come from ./.env (copy .env.example). Compose refuses to start
+# if a required variable is missing. Ports are published on 127.0.0.1 only.
 
 services:
   backend:
@@ -6,23 +7,42 @@ services:
       context: ./backend
     container_name: healthcare-crm-backend
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
+      GROQ_API_KEY: ${GROQ_API_KEY:?set GROQ_API_KEY in .env}
+      GROQ_MODEL: ${GROQ_MODEL:-gemma2-9b-it}
+      GROQ_FALLBACK_MODEL: ${GROQ_FALLBACK_MODEL:-llama-3.3-70b-versatile}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      # python:3.11-slim has no curl; use the interpreter that's already there.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
     container_name: healthcare-crm-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: hcp_user
-      POSTGRES_PASSWORD: hcp_pass
-      POSTGRES_DB: hcp_crm
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # $$ defers expansion to the container, which has these vars set.
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     volumes:
       - hcp_pg_data:/var/lib/postgresql/data
 
