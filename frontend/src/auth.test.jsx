@@ -154,3 +154,36 @@ describe('fuzzy product matches keep the original text', () => {
     expect(withOriginal('OncoBoost', 'products_discussed', matches)).toBe('OncoBoost')
   })
 })
+
+describe('history edit rules match the API', () => {
+  const rows = [
+    { id: 'mine', owner_id: 'u-mgr', interaction_type: 'Visit', interaction_date: '2026-11-08', raw_notes: 'my notes', edit_history: [] },
+    { id: 'theirs', owner_id: 'u-rep', interaction_type: 'Call', interaction_date: '2026-11-07', raw_notes: 'rep notes', edit_history: [] },
+  ]
+  const storeFor = (user) => {
+    const s = createAppStore({ auth: { token: 't', user, status: 'succeeded', error: null, notice: null } })
+    s.dispatch({ type: 'interactions/fetch/fulfilled', payload: rows })
+    return s
+  }
+
+  it('a manager can edit only their own rows; an admin can edit all', async () => {
+    const { default: InteractionHistory } = await import('./components/InteractionHistory')
+    render(<Provider store={storeFor({ id: 'u-mgr', email: 'm@x', role: 'manager' })}><InteractionHistory /></Provider>)
+    expect(screen.getAllByRole('button', { name: 'Edit Interaction' })).toHaveLength(1)
+    cleanup()
+    render(<Provider store={storeFor({ id: 'u-adm', email: 'a@x', role: 'admin' })}><InteractionHistory /></Provider>)
+    expect(screen.getAllByRole('button', { name: 'Edit Interaction' })).toHaveLength(2)
+  })
+
+  it('a failed save keeps the editor open and shows why', async () => {
+    // more specific route first: the fake router matches by prefix, in order
+    routes = { '/api/interactions/mine': () => [403, { detail: 'Not allowed to change this interaction' }], ...routes }
+    const { default: InteractionHistory } = await import('./components/InteractionHistory')
+    render(<Provider store={storeFor({ id: 'u-mgr', email: 'm@x', role: 'manager' })}><InteractionHistory /></Provider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Interaction' }))
+    fireEvent.change(screen.getByLabelText('Edit notes'), { target: { value: 'changed' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })) })
+    expect(screen.getByRole('alert').textContent).toContain('Not allowed to change this interaction')
+    expect(screen.getByLabelText('Edit notes').value).toBe('changed')
+  })
+})

@@ -8,27 +8,39 @@ export default function InteractionHistory() {
   const dispatch = useDispatch();
 
   const items = useSelector((s) => s.interactions.items);
+  const user = useSelector((s) => s.auth?.user);
 
   const [editingId, setEditingId] = useState(null);
   const [draftNotes, setDraftNotes] = useState("");
+  const [editError, setEditError] = useState("");
+
+  // Same rule as the API: admins edit anything; everyone else only their own rows
+  // (managers can read other reps' interactions but not change them).
+  const canEdit = (item) => user?.role === "admin" || (user && item.owner_id === user.id);
 
   const startEdit = (item) => {
     setEditingId(item.id);
     setDraftNotes(item.raw_notes || "");
+    setEditError("");
   };
 
-  const saveEdit = (item) => {
-    dispatch(
-      editInteraction({
-        id: item.id,
-        updates: {
-          raw_notes: draftNotes,
-          edit_reason: "Corrected from UI",
-        },
-      })
-    );
-
-    setEditingId(null);
+  const saveEdit = async (item) => {
+    try {
+      await dispatch(
+        editInteraction({
+          id: item.id,
+          updates: {
+            raw_notes: draftNotes,
+            edit_reason: "Corrected from UI",
+          },
+        })
+      ).unwrap();
+      setEditingId(null);
+      setEditError("");
+    } catch (err) {
+      // Keep the editor open with the rep's text, and say why it failed.
+      setEditError(`Couldn’t save: ${err.message}`);
+    }
   };
 
   if (items.length === 0) {
@@ -99,7 +111,10 @@ export default function InteractionHistory() {
 
             <>
 
+              {editError && <p className="form-error" role="alert">{editError}</p>}
+
               <textarea
+                aria-label="Edit notes"
                 value={draftNotes}
                 onChange={(e) =>
                   setDraftNotes(e.target.value)
@@ -212,7 +227,8 @@ export default function InteractionHistory() {
 
               )}
 
-              <button
+              {canEdit(item) && (
+                <button
                 className="btn-secondary"
                 style={{
                   marginTop: 18,
@@ -221,6 +237,7 @@ export default function InteractionHistory() {
               >
                 Edit Interaction
               </button>
+              )}
 
             </>
 
