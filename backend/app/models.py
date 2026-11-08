@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 from datetime import datetime, date, time, timezone
-from sqlalchemy import String, Text, Date, DateTime, Time, ForeignKey, JSON, Float, Boolean, Index, false, func
+from sqlalchemy import text, String, Text, Date, DateTime, Time, ForeignKey, JSON, Float, Boolean, Index, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -61,6 +61,8 @@ class Interaction(Base):
     # The HCP consented to a voice note being recorded and transcribed. Audio is never stored.
     voice_note_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     voice_note_consent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Product names the chat agent mentioned that match no catalog product (catalog is admin-only).
+    unmatched_products: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("'[]'::json"))
 
     compliance_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     compliance_notes: Mapped[str] = mapped_column(Text, nullable=True)

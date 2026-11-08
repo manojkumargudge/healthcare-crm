@@ -1271,3 +1271,5 @@ textarea{
 .voice-transcript{ margin:8px 0 0 24px; font-size:12px; color:#334155; }
 .voice-consent-note{ margin:6px 0 0; font-size:12px; color:#166534; }
 .voice-consent input[type="checkbox"]{ width:auto; flex:0 0 auto; height:auto; padding:0; box-shadow:none; }
+.sample-error{ margin:6px 0 0; font-size:12px; }
+.unmatched-products{ color:#9a3412; font-size:13px; }

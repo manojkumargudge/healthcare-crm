@@ -113,11 +113,9 @@ export default function VoiceNoteRecorder({ onSummary, disabled = false }) {
               disabled={phase === 'recording' || phase === 'uploading'}
               onChange={(e) => setConsent(e.target.checked)}
             />
-            The HCP consented to this conversation being recorded and transcribed.
+            HCP consents to this recording being sent to a third-party AI service for transcription. Audio is not stored.
           </label>
-          <p className="voice-hint">
-            Audio is sent once for transcription and is never stored. Up to {MAX_SECONDS / 60} minutes.
-          </p>
+          <p className="voice-hint">Up to {MAX_SECONDS / 60} minutes.</p>
 
           <div className="voice-controls">
             {phase === 'recording' ? (

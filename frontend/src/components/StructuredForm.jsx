@@ -88,6 +88,7 @@ export default function StructuredForm() {
   const [samples, setSamples] = useState([]) // {product, qty}
   const [showSampleForm, setShowSampleForm] = useState(false)
   const [sampleDraft, setSampleDraft] = useState({ product: '', qty: 1 })
+  const [sampleError, setSampleError] = useState('')
   const [sentiment, setSentiment] = useState('') // optional: '' = not set
   const [outcomes, setOutcomes] = useState('')
   const [followUpActions, setFollowUpActions] = useState('')
@@ -103,9 +104,8 @@ export default function StructuredForm() {
     return { value: m.name, badge: m.approved ? undefined : PENDING }
   }, [])
   const searchMaterials = useCallback(async (q) => (await api.searchMaterials(q)).map(toOption), [toOption])
-  // One product catalog for "Products Discussed" and sample product names.
+  // One admin-only product catalog for "Products Discussed" and sample products: pick, don't create.
   const searchProducts = useCallback(async (q) => (await api.searchProducts(q)).map((p) => p.name), [])
-  const createProduct = useCallback(async (name) => (await api.createProduct(name)).name, [])
   const refreshProductOptions = useCallback(async (q) => {
     try { setProductOptions(await searchProducts(q)) } catch { setProductOptions([]) }
   }, [searchProducts])
@@ -115,9 +115,22 @@ export default function StructuredForm() {
   }, [])
   const createMaterial = useCallback(async (name) => toOption(await api.createMaterial(name)), [toOption])
 
-  const addSample = () => {
-    if (!sampleDraft.product.trim()) return
-    setSamples([...samples, { product: sampleDraft.product.trim(), qty: Number(sampleDraft.qty) || 1 }])
+  const addSample = async () => {
+    const typed = sampleDraft.product.trim()
+    if (!typed) return
+    // Samples must be catalog products (case-insensitive); use the catalog spelling.
+    let match
+    try {
+      match = (await searchProducts(typed)).find((n) => n.toLowerCase() === typed.toLowerCase())
+    } catch {
+      match = undefined
+    }
+    if (!match) {
+      setSampleError(`"${typed}" is not in the product list. Pick a product from the list.`)
+      return
+    }
+    setSampleError('')
+    setSamples([...samples, { product: match, qty: Number(sampleDraft.qty) || 1 }])
     setSampleDraft({ product: '', qty: 1 })
   }
 
@@ -218,9 +231,8 @@ export default function StructuredForm() {
             values={products}
             onChange={setProducts}
             search={searchProducts}
-            onCreate={createProduct}
-            placeholder="Search products or add a new one"
-            createLabel={(q) => `Add "${q}" to products`}
+            allowCreate={false}
+            placeholder="Search products..."
           />
         </div>
 
@@ -287,6 +299,7 @@ export default function StructuredForm() {
                 <button type="button" className="btn-small" onClick={addSample}>Add</button>
               </div>
             )}
+            {sampleError && <p className="form-error sample-error" role="alert">{sampleError}</p>}
             {samples.length === 0 ? (
               !showSampleForm && <p className="empty-note">No samples added</p>
             ) : (

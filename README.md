@@ -72,8 +72,7 @@ The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](d
 | POST | `/api/materials` | Add a material to the catalog as **pending approval** (returns the existing one if the name already exists, case-insensitive) |
 | POST | `/api/chat/turn` | One chat turn: reply, tools called, any interaction logged |
 | GET | `/api/chat/{session_id}/history` | Stored messages for a chat session |
-| GET | `/api/products?q=` | Search the product catalog (Products Discussed and sample products) |
-| POST | `/api/products` | Add a product (returns the existing one if the name already exists, case-insensitive) |
+| GET | `/api/products?q=` | Search the product catalog (Products Discussed and sample products). Read-only: see [Product catalog](#product-catalog) |
 | POST | `/api/voice-notes/summarize?consent=true` | Raw audio body (webm/ogg/wav/mp3/m4a/flac, max 10 MB) → transcript + "Topics Discussed" summary. Nothing is stored |
 | GET | `/health` | Liveness check |
 
@@ -172,9 +171,21 @@ RUN_LIVE_GROQ=1 LIVE_GROQ_API_KEY=<your key> pytest -m live -v   # same TEST_DAT
 - **Backend:** ruff, mypy, and pytest against a Postgres 16 service.
 - **Frontend:** `npm ci`, `npm run build`, and Vitest.
 
+## Product catalog
+
+Products Discussed and sample products come from one **admin-only** catalog. There is no API to add products; an admin manages it:
+
+```bash
+docker compose exec backend python -m app.admin list-products
+docker compose exec backend python -m app.admin add-product "NeuroCalm"   # idempotent, case-insensitive
+```
+
+- **Form:** must pick from the catalog. Unknown products, including sample products, are rejected with 422, "Pick from the product list". Case differences are accepted and stored in the catalog spelling.
+- **Chat:** product names the agent extracts are mapped to the closest catalog product. The match ignores case, spacing and punctuation and tolerates small typos ("cardiomx" becomes CardioMax). Names with no close match are stored in the interaction's `unmatched_products` and shown in the history. They are never added to the catalog.
+
 ## Voice notes
 
-In the form, **Summarize from Voice Note (Requires Consent)** opens a small panel. Recording stays disabled until the rep ticks *"The HCP consented to this conversation being recorded and transcribed."*
+In the form, **Summarize from Voice Note (Requires Consent)** opens a small panel. Recording stays disabled until the rep ticks *"HCP consents to this recording being sent to a third-party AI service for transcription. Audio is not stored."*
 
 How it works:
 - The browser records with `MediaRecorder`, for up to 3 minutes.
@@ -200,6 +211,7 @@ There is no Alembic yet. Schema changes are hand-written, idempotent SQL files i
 | `004_materials_approval.sql` | Adds `materials.approved`. Materials that existed when the column was added (starter catalog and migrated tags) are approved; materials added afterwards start as pending. Also makes `attendees` and `materials.created_at` NOT NULL. |
 | `005_interaction_time_outcomes.sql` | Adds `interaction_time`, `outcomes` and `follow_up_actions` to interactions (fields from the brief's form). |
 | `006_products_voice_consent.sql` | Adds the `products` catalog (backfilled from existing products and sample names) and `voice_note_consent` / `voice_note_consent_at` on interactions. |
+| `007_unmatched_products.sql` | Adds `interactions.unmatched_products`: product names from chat that match no catalog product. |
 
 Every file is safe to run more than once. Back up first, then apply all of them:
 

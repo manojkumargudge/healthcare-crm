@@ -5,7 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.catalog import canonical_samples, resolve_attendees, resolve_materials, resolve_products
+from app.catalog import (
+    UnknownProductsError,
+    catalog_samples,
+    require_catalog_products,
+    resolve_attendees,
+    resolve_materials,
+)
 from app.models import utcnow
 from app.follow_ups import list_follow_ups, suggest_follow_ups
 from app.models import Interaction
@@ -39,8 +45,12 @@ async def create_interaction(payload: InteractionCreate, db: AsyncSession = Depe
         data["interaction_date"] = date_cls.today()
     data["attendees"] = await resolve_attendees(db, data["attendees"])
     data["materials_shared"] = await resolve_materials(db, data["materials_shared"])
-    data["products_discussed"] = await resolve_products(db, data["products_discussed"])
-    data["samples_dropped"] = await canonical_samples(db, data["samples_dropped"])
+    # The product catalog is admin-only: the form must pick from it.
+    try:
+        data["products_discussed"] = await require_catalog_products(db, data["products_discussed"])
+        data["samples_dropped"], _ = await catalog_samples(db, data["samples_dropped"], strict=True)
+    except UnknownProductsError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if data["voice_note_consent"] and data["voice_note_consent_at"] is None:
         data["voice_note_consent_at"] = utcnow()
     # Form-set sentiment label is authoritative; there is no LLM score for it.
@@ -62,6 +72,14 @@ async def update_interaction(interaction_id: str, payload: InteractionUpdate, db
     tools = build_tools(db)
     edit_tool = next(t for t in tools if t.name == "edit_interaction")
     updates = {k: v for k, v in payload.model_dump(exclude={"edited_by", "edit_reason"}).items() if v is not None}
+    # Form edits pick products from the admin-only catalog (the tool's fuzzy matching is for chat).
+    try:
+        if "products_discussed" in updates:
+            updates["products_discussed"] = await require_catalog_products(db, updates["products_discussed"])
+        if "samples_dropped" in updates:
+            updates["samples_dropped"], _ = await catalog_samples(db, updates["samples_dropped"], strict=True)
+    except UnknownProductsError as exc:
+        raise HTTPException(422, str(exc)) from exc
     raw = await edit_tool.coroutine(  # type: ignore[misc]  # StructuredTool.coroutine is Optional; set for every tool in build_tools
         interaction_id=interaction_id,
         updates=json.dumps(updates),

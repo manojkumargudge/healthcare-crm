@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.tools import build_tools
@@ -186,63 +186,140 @@ async def test_consent_defaults_false_and_timestamp_needs_consent(client: httpx.
 
 # ------------------------------------------------------------ products catalog
 async def test_seed_products_idempotent(db: AsyncSession) -> None:
+    await db.execute(delete(Product))
+    await db.commit()
     assert await seed_products(db) == len(SEED_PRODUCTS)
     assert await seed_products(db) == 0
 
 
-async def test_product_search_and_add(client: httpx.AsyncClient, db: AsyncSession) -> None:
-    await seed_products(db)
+async def _catalog_size(db: AsyncSession) -> int:
+    return int((await db.execute(select(func.count()).select_from(Product))).scalar_one())
+
+
+# ------------------------------------------------------- admin-only catalog
+async def test_product_search_is_read_only(client: httpx.AsyncClient) -> None:
     assert [p["name"] for p in (await client.get("/api/products", params={"q": "onco"})).json()] == ["OncoBoost"]
-    first = await client.post("/api/products", json={"name": " NeuroCalm "})
-    assert first.status_code == 201 and first.json()["name"] == "NeuroCalm"
-    again = await client.post("/api/products", json={"name": "neurocalm"})
-    assert again.status_code == 200 and again.json()["id"] == first.json()["id"]
+    assert (await client.post("/api/products", json={"name": "NeuroCalm"})).status_code == 405
 
 
-async def test_form_products_and_sample_names_use_catalog(client: httpx.AsyncClient, hcp: dict, db: AsyncSession) -> None:
-    await seed_products(db)
+async def test_form_accepts_catalog_products_case_insensitively(client: httpx.AsyncClient, hcp: dict) -> None:
     body = (
         await client.post(
             "/api/interactions",
             json={
                 "hcp_id": hcp["id"],
-                "products_discussed": ["cardiomax", "Brand New Rx"],
+                "products_discussed": ["cardiomax", "OncoBoost"],
                 "samples_dropped": [{"product": "oncoboost", "qty": 1}],
             },
         )
     ).json()
-    assert body["products_discussed"] == ["CardioMax", "Brand New Rx"]
+    assert body["products_discussed"] == ["CardioMax", "OncoBoost"]
     assert body["samples_dropped"] == [{"product": "OncoBoost", "qty": 1}]
-    names = [p["name"] for p in (await client.get("/api/products", params={"q": "brand"})).json()]
-    assert names == ["Brand New Rx"]
+    assert body["unmatched_products"] == []
 
 
-async def test_chat_log_writes_products_from_catalog(db: AsyncSession, fake_llm) -> None:
-    await seed_products(db)
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"products_discussed": ["CardioMax", "Brand New Rx"]}, id="products"),
+        pytest.param({"samples_dropped": [{"product": "Brand New Rx", "qty": 1}]}, id="sample"),
+        pytest.param({"products_discussed": ["cardiomx"]}, id="typo-is-not-guessed-for-the-form"),
+    ],
+)
+async def test_form_rejects_unknown_product_and_never_adds_it(
+    client: httpx.AsyncClient, hcp: dict, db: AsyncSession, payload: dict
+) -> None:
+    before = await _catalog_size(db)
+    resp = await client.post("/api/interactions", json={"hcp_id": hcp["id"], **payload})
+    assert resp.status_code == 422
+    assert "Pick from the product list" in resp.json()["detail"]
+    assert (await client.get("/api/interactions")).json() == []
+    assert await _catalog_size(db) == before
+
+
+async def test_form_patch_rejects_unknown_product(client: httpx.AsyncClient, hcp: dict, db: AsyncSession) -> None:
+    created = (await client.post("/api/interactions", json={"hcp_id": hcp["id"], "products_discussed": ["CardioMax"]})).json()
+    before = await _catalog_size(db)
+    resp = await client.patch(f"/api/interactions/{created['id']}", json={"products_discussed": ["Mystery Pill"]})
+    assert resp.status_code == 422 and "Mystery Pill" in resp.json()["detail"]
+    again = (await client.get(f"/api/interactions/{created['id']}")).json()
+    assert again["products_discussed"] == ["CardioMax"] and again["edit_history"] == []
+    assert await _catalog_size(db) == before
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        ("cardiomx", "CardioMax"),  # typo
+        ("CARDIOMAX", "CardioMax"),  # case
+        ("Cardio Max", "CardioMax"),  # spacing
+        ("cardio-max", "CardioMax"),  # punctuation
+        ("oncobost", "OncoBoost"),
+        ("glucobalanse", "GlucoBalance"),
+        ("Cardio", None),  # too far from anything
+        ("Zylotrex", None),
+        ("", None),
+    ],
+)
+def test_closest_product(typed: str, expected: str | None) -> None:
+    from app.catalog import closest_product
+
+    assert closest_product(typed, ["CardioMax", "CardioPlus", "OncoBoost", "OncoLife", "GlucoBalance"]) == expected
+
+
+async def test_chat_typo_maps_to_catalog_and_unmatched_is_kept_not_added(db: AsyncSession, fake_llm) -> None:
     hcp = HCP(name="Dr. P")
     db.add(hcp)
     await db.commit()
-    fake_llm(json.dumps({"summary": "s", "products_discussed": ["CARDIOMAX"], "samples_dropped": [{"product": "glucobalance", "qty": 2}]}))
+    before = await _catalog_size(db)
+    fake_llm(
+        json.dumps(
+            {
+                "summary": "s",
+                "products_discussed": ["cardiomx", "Zylotrex"],
+                "samples_dropped": [{"product": "oncobost", "qty": 2}, {"product": "Mystery Pill", "qty": 1}],
+            }
+        )
+    )
     tool = next(t for t in build_tools(db) if t.name == "log_interaction")
     out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="notes"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     assert out["products_discussed"] == ["CardioMax"]
+    assert out["unmatched_products"] == ["Zylotrex", "Mystery Pill"]
     row = await db.get(Interaction, out["interaction_id"])
-    assert row is not None and row.samples_dropped == [{"product": "GlucoBalance", "qty": 2}]
+    assert row is not None
+    assert row.samples_dropped == [{"product": "OncoBoost", "qty": 2}, {"product": "Mystery Pill", "qty": 1}]
+    assert row.unmatched_products == ["Zylotrex", "Mystery Pill"]
+    assert await _catalog_size(db) == before  # chat never adds to the catalog
 
 
-async def test_edit_tool_products_use_catalog(db: AsyncSession) -> None:
-    await seed_products(db)
+async def test_edit_tool_fuzzy_matches_and_accumulates_unmatched(db: AsyncSession) -> None:
     hcp = HCP(name="Dr. E")
     db.add(hcp)
     await db.commit()
-    row = Interaction(hcp_id=hcp.id)
+    row = Interaction(hcp_id=hcp.id, unmatched_products=["Old Name"])
     db.add(row)
     await db.commit()
+    before = await _catalog_size(db)
     tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
-    await tool.coroutine(interaction_id=row.id, updates=json.dumps({"products_discussed": ["oncoboost"]}))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+    await tool.coroutine(interaction_id=row.id, updates=json.dumps({"products_discussed": ["oncobost", "Newdrug"]}))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     await db.refresh(row)
     assert row.products_discussed == ["OncoBoost"]
-    assert (await db.execute(select(func.count()).select_from(Product))).scalar_one() == len(SEED_PRODUCTS)
+    assert row.unmatched_products == ["Old Name", "Newdrug"]
+    assert await _catalog_size(db) == before
+
+
+async def test_new_interactions_default_to_no_unmatched_products(client: httpx.AsyncClient, hcp: dict) -> None:
+    assert (await client.post("/api/interactions", json={"hcp_id": hcp["id"]})).json()["unmatched_products"] == []
+
+
+async def test_admin_cli_adds_products_idempotently(db: AsyncSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import admin
+    from tests.conftest import TestSessionLocal
+
+    monkeypatch.setattr(admin, "AsyncSessionLocal", TestSessionLocal)
+    assert await admin.add_product("  NeuroCalm ") == ("NeuroCalm", True)
+    assert await admin.add_product("neurocalm") == ("NeuroCalm", False)
+    assert "NeuroCalm" in await admin.list_products()
 
 
 MIGRATION_006 = Path(__file__).resolve().parents[1] / "migrations" / "006_products_voice_consent.sql"

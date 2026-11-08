@@ -10,7 +10,7 @@ vi.mock('../api/client', () => ({
     listHcps: vi.fn(), listInteractions: vi.fn(), createInteraction: vi.fn(), updateInteraction: vi.fn(),
     chatTurn: vi.fn(), searchHcps: vi.fn(), searchMaterials: vi.fn(), createMaterial: vi.fn(),
     listFollowUps: vi.fn(), suggestFollowUps: vi.fn(), updateFollowUp: vi.fn(),
-    searchProducts: vi.fn(), createProduct: vi.fn(), summarizeVoiceNote: vi.fn(),
+    searchProducts: vi.fn(), summarizeVoiceNote: vi.fn(),
   },
 }))
 
@@ -63,12 +63,12 @@ beforeEach(() => {
   api.searchProducts.mockImplementation(async (q) =>
     [{ id: 'p1', name: 'CardioMax' }, { id: 'p2', name: 'OncoBoost' }].filter((p) => p.name.toLowerCase().includes((q || '').toLowerCase()))
   )
-  api.createProduct.mockImplementation(async (name) => ({ id: 'p9', name }))
   api.suggestFollowUps.mockResolvedValue([])
   api.listFollowUps.mockResolvedValue([])
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
+const CONSENT_TEXT = 'HCP consents to this recording being sent to a third-party AI service for transcription. Audio is not stored.'
 const openPanel = () => fireEvent.click(screen.getByRole('button', { name: /Summarize from Voice Note \(Requires Consent\)/ }))
 
 describe('VoiceNoteRecorder', () => {
@@ -79,7 +79,7 @@ describe('VoiceNoteRecorder', () => {
     expect(record.disabled).toBe(true)
     fireEvent.click(record)
     expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('checkbox', { name: /consented to this conversation being recorded/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: CONSENT_TEXT }))
     expect(screen.getByRole('button', { name: /Record/ }).disabled).toBe(false)
   })
 
@@ -167,5 +167,42 @@ describe('StructuredForm: voice note + products', () => {
     const options = [...document.querySelectorAll('#sample-product-options option')].map((o) => o.value)
     expect(options).toEqual(['OncoBoost'])
     expect(input.getAttribute('list')).toBe('sample-product-options')
+  })
+})
+
+describe('admin-only product catalog in the form', () => {
+  it('shows the exact consent wording', () => {
+    render(<VoiceNoteRecorder onSummary={vi.fn()} />)
+    openPanel()
+    expect(screen.getByRole('checkbox', { name: CONSENT_TEXT })).toBeTruthy()
+  })
+
+  it('Products Discussed never offers to create a product', async () => {
+    render(<Provider store={makeStore()}><StructuredForm /></Provider>)
+    fireEvent.change(screen.getByLabelText('Products Discussed'), { target: { value: 'Zylotrex' } })
+    await waitFor(() => expect(api.searchProducts).toHaveBeenCalledWith('Zylotrex'))
+    expect(document.getElementById('products-options')).toBeNull() // no suggestions, and no "Add" entry
+    await act(async () => { fireEvent.keyDown(screen.getByLabelText('Products Discussed'), { key: 'Enter' }) })
+    expect(screen.queryByText('Zylotrex')).toBeNull()
+  })
+
+  it('a sample must be a catalog product; the catalog spelling is used', async () => {
+    render(<Provider store={makeStore()}><StructuredForm /></Provider>)
+    fireEvent.click(screen.getByRole('button', { name: /Add Sample/ }))
+    fireEvent.change(screen.getByLabelText('Sample product'), { target: { value: 'Mystery Pill' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })) })
+    expect(screen.getByRole('alert').textContent).toBe('"Mystery Pill" is not in the product list. Pick a product from the list.')
+
+    fireEvent.change(screen.getByLabelText('Sample product'), { target: { value: 'oncoboost' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })) })
+    expect(screen.getByText('OncoBoost × 1')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('shows the server message for a rejected product', async () => {
+    api.createInteraction.mockRejectedValue(new Error('API 422: Unknown product(s): Zylotrex. Pick from the product list.'))
+    render(<Provider store={makeStore()}><StructuredForm /></Provider>)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Log Interaction' })) })
+    expect(screen.getByText(/Pick from the product list/)).toBeTruthy()
   })
 })

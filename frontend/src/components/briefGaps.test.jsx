@@ -19,6 +19,7 @@ vi.mock('../api/client', () => ({
     listFollowUps: vi.fn(),
     suggestFollowUps: vi.fn(),
     updateFollowUp: vi.fn(),
+    searchProducts: vi.fn(),
   },
 }))
 
@@ -287,12 +288,13 @@ describe('StructuredForm matches the brief mockup', () => {
     }))
   })
 
-  it('Add Sample opens the sample row and lists added samples', () => {
+  it('Add Sample opens the sample row and lists added samples', async () => {
+    api.searchProducts.mockResolvedValue([{ id: 'p1', name: 'CardioMax' }])
     renderWithStore(<StructuredForm />)
     fireEvent.click(screen.getByRole('button', { name: /Add Sample/ }))
     fireEvent.change(screen.getByLabelText('Sample product'), { target: { value: 'CardioMax' } })
     fireEvent.change(screen.getByLabelText('Sample quantity'), { target: { value: '2' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Add' })) })
     expect(screen.getByText('CardioMax × 2')).toBeTruthy()
     expect(screen.queryByText('No samples added')).toBeNull()
   })

@@ -6,6 +6,7 @@ same canonical values.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 from typing import Any, Iterable, Literal, Optional
@@ -24,7 +25,8 @@ SENTIMENT_LABELS: tuple[str, ...] = ("Positive", "Neutral", "Negative")
 MAX_NAME_LEN = 200
 MAX_ITEMS = 50
 
-# Starter product list (Products Discussed and sample products). Reps can add more.
+# Starter product list (Products Discussed and sample products). The catalog is
+# admin-only: reps pick from it; add products with `python -m app.admin add-product`.
 SEED_PRODUCTS: tuple[str, ...] = ("CardioMax", "OncoBoost", "GlucoBalance")
 
 # Starter catalog for the "Materials shared" picker. Reps can add more from
@@ -108,31 +110,91 @@ async def resolve_materials(db: AsyncSession, names: Optional[Iterable[Any]]) ->
     return [canonical.get(n.lower(), n) for n in cleaned]
 
 
-async def resolve_products(db: AsyncSession, names: Optional[Iterable[Any]]) -> list[str]:
-    """Map product names to catalog entries (case-insensitive), adding unknown ones. No commit."""
+class UnknownProductsError(ValueError):
+    """Form input named products that are not in the (admin-only) catalog."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__(f"Unknown product(s): {', '.join(names)}. Pick from the product list.")
+        self.names = names
+
+
+def _product_key(name: str) -> str:
+    """Comparison key: lower-case letters and digits only ("Cardio-Max " -> "cardiomax")."""
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+# A typo like "cardiomx" vs "CardioMax" scores ~0.94; distinct brands sharing a prefix
+# ("CardioPlus" vs "CardioMax", ~0.63) stay well below this.
+FUZZY_CUTOFF = 0.85
+
+
+def closest_product(name: str, catalog: Iterable[str]) -> Optional[str]:
+    """Best catalog match for a free-text product name (case/spacing-insensitive, small typos), or None."""
+    key = _product_key(name)
+    if not key:
+        return None
+    by_key = {_product_key(c): c for c in catalog}
+    if key in by_key:
+        return by_key[key]
+    match = difflib.get_close_matches(key, list(by_key), n=1, cutoff=FUZZY_CUTOFF)
+    return by_key[match[0]] if match else None
+
+
+async def catalog_products(db: AsyncSession) -> list[str]:
+    return list((await db.execute(select(Product.name))).scalars().all())
+
+
+async def require_catalog_products(db: AsyncSession, names: Optional[Iterable[Any]]) -> list[str]:
+    """Form path: every name must be a catalog product (case-insensitive). Never adds to the catalog."""
     cleaned = clean_names(names)
     if not cleaned:
         return []
-    await db.execute(
-        pg_insert(Product)
-        .values([{"id": gen_uuid(), "name": n, "created_at": utcnow()} for n in cleaned])
-        .on_conflict_do_nothing()
-    )
-    rows = await db.execute(select(Product.name).where(func.lower(Product.name).in_([n.lower() for n in cleaned])))
-    canonical = {name.lower(): name for (name,) in rows.all()}
-    return [canonical.get(n.lower(), n) for n in cleaned]
+    catalog = {n.lower(): n for n in await catalog_products(db)}
+    unknown = [n for n in cleaned if n.lower() not in catalog]
+    if unknown:
+        raise UnknownProductsError(unknown)
+    return clean_names(catalog[n.lower()] for n in cleaned)
 
 
-async def canonical_samples(db: AsyncSession, samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sample product names use the catalog spelling (unknown products are added)."""
+async def match_products(db: AsyncSession, names: Optional[Iterable[Any]]) -> tuple[list[str], list[str]]:
+    """Chat path: map names to the closest catalog product. Returns (matched, unmatched).
+    Never adds to the catalog."""
+    cleaned = clean_names(names)
+    if not cleaned:
+        return [], []
+    catalog = await catalog_products(db)
+    matched: list[str] = []
+    unmatched: list[str] = []
+    for n in cleaned:
+        hit = closest_product(n, catalog)
+        (matched if hit else unmatched).append(hit or n)
+    return clean_names(matched), clean_names(unmatched)
+
+
+async def catalog_samples(
+    db: AsyncSession, samples: list[dict[str, Any]], *, strict: bool
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Sample product names in catalog spelling.
+
+    strict (form): unknown products raise UnknownProductsError.
+    not strict (chat): closest match; an unmatched product keeps its name on the
+    sample (compliance needs it) and is also returned in the unmatched list.
+    """
     if not samples:
-        return []
-    names = await resolve_products(db, [s.get("product") for s in samples])
-    by_lower = {n.lower(): n for n in names}
-    return [
-        {**s, "product": by_lower.get(" ".join(str(s.get("product", "")).split()).lower(), s.get("product"))}
-        for s in samples
-    ]
+        return [], []
+    names = [str(s.get("product", "")) for s in samples]
+    if strict:
+        canonical = await require_catalog_products(db, names)
+        by_lower = {c.lower(): c for c in canonical}
+        return [{**s, "product": by_lower[" ".join(n.split()).lower()]} for s, n in zip(samples, names, strict=True)], []
+    catalog = await catalog_products(db)
+    out, unmatched = [], []
+    for s, n in zip(samples, names, strict=True):
+        hit = closest_product(n, catalog)
+        if hit is None:
+            unmatched.append(" ".join(n.split()))
+        out.append({**s, "product": hit or " ".join(n.split())})
+    return out, clean_names(unmatched)
 
 
 async def seed_products(db: AsyncSession) -> int:

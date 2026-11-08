@@ -98,6 +98,7 @@ class InteractionOut(BaseModel):
     follow_up_actions: Optional[str] = None
     voice_note_consent: bool = False
     voice_note_consent_at: Optional[datetime] = None
+    unmatched_products: list = []
     compliance_flag: bool
     compliance_notes: Optional[str] = None
     created_at: datetime
@@ -114,10 +115,6 @@ class MaterialOut(BaseModel):
     id: str
     name: str
     approved: bool
-
-
-class ProductCreate(BaseModel):
-    name: Name
 
 
 class ProductOut(BaseModel):
