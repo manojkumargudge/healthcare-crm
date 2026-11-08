@@ -25,6 +25,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
+from app.db_url import asyncpg_dsn_and_args, split_ssl
 from app import models  # noqa: F401  (registers every table on Base.metadata)
 from app.database import Base
 
@@ -42,8 +43,14 @@ def migration_files() -> list[Path]:
     return sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"))
 
 
-def _asyncpg_dsn(url: str) -> str:
-    return make_url(url).set(drivername="postgresql").render_as_string(hide_password=False)
+# Serializes concurrent "apply" runs (e.g. two instances starting at once). Arbitrary constant.
+_MIGRATION_LOCK_ID = 727_001
+
+
+async def _connect(url: str, **kwargs: Any) -> asyncpg.Connection:
+    """asyncpg connection for a SQLAlchemy-style URL (sslmode=... becomes asyncpg's ssl argument)."""
+    dsn, args = asyncpg_dsn_and_args(url)
+    return await asyncpg.connect(dsn, **args, **kwargs)
 
 
 def _server_settings(schema: str | None) -> dict[str, str]:
@@ -55,7 +62,7 @@ async def apply_all(url: str, *, schema: str | None = None, verbose: bool = Fals
 
     `schema` (tests only) sets search_path so the migrations build into that schema.
     """
-    conn = await asyncpg.connect(_asyncpg_dsn(url), server_settings=_server_settings(schema))
+    conn = await _connect(url, server_settings=_server_settings(schema))
     if verbose:
         conn.add_log_listener(lambda _c, msg: print(f"    {msg.message}"))
     applied = []
@@ -70,6 +77,7 @@ async def apply_all(url: str, *, schema: str | None = None, verbose: bool = Fals
             await conn.execute(
                 "SELECT set_config('app.seed_admin_password_hash', $1, false)", hash_password(settings.admin_password)
             )
+        await conn.execute("SELECT pg_advisory_lock($1)", _MIGRATION_LOCK_ID)
         for path in migration_files():
             if verbose:
                 print(f"applying {path.name}")
@@ -85,7 +93,7 @@ async def reset_test_schema(url: str) -> None:
     name = make_url(url).database or ""
     if not name.endswith("_test"):
         raise SystemExit(f"refusing to wipe database {name!r}: name must end with '_test'")
-    conn = await asyncpg.connect(_asyncpg_dsn(url))
+    conn = await _connect(url)
     try:
         await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
     finally:
@@ -101,8 +109,9 @@ def _describe(diff: Any) -> str:
 
 async def check_drift(url: str, *, schema: str | None = None) -> list[str]:
     """Differences between the live schema and app/models.py (empty list = no drift)."""
+    clean, ssl_args = split_ssl(url)
     engine = create_async_engine(
-        url, poolclass=NullPool, connect_args={"server_settings": _server_settings(schema)}
+        clean, poolclass=NullPool, connect_args={**ssl_args, "server_settings": _server_settings(schema)}
     )
     try:
         async with engine.connect() as conn:

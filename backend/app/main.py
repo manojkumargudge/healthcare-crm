@@ -11,10 +11,10 @@ from app.database import AsyncSessionLocal, engine, init_db
 from app.routers import admin, auth, chat, follow_ups, hcp, interactions, materials, products, voice_notes
 
 
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    await init_db()
+    if settings.run_migrations_on_startup:
+        await init_db()  # applies backend/migrations/*.sql (idempotent, serialized by an advisory lock)
     async with AsyncSessionLocal() as session:
         await ensure_seed_admin(session)
         await seed_materials(session)
@@ -31,7 +31,7 @@ app = FastAPI(title="AI-First HCP CRM", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_origin],
+    allow_origins=settings.allowed_origins,  # FRONTEND_ORIGIN + CORS_ORIGINS
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,6 +53,8 @@ async def root():
     return {"status": "ok", "service": "AI-First HCP CRM API"}
 
 
-@app.get("/health")
+# Liveness only (no database query), so uptime pings keep the web service awake
+# without waking a suspended database. HEAD is for monitors that ping with HEAD.
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "healthy"}
