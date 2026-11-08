@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 from typing import Annotated, Literal, Optional
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from app.catalog import Sentiment, clean_names
 from app.samples import SampleDrop
@@ -45,6 +45,15 @@ class InteractionCreate(BaseModel):
     raw_notes: Optional[str] = None
     outcomes: Optional[str] = None
     follow_up_actions: Optional[str] = None
+    # Set when a voice note was recorded: consent_at comes from the voice-note endpoint.
+    voice_note_consent: bool = False
+    voice_note_consent_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _consent_timestamp_needs_consent(self) -> "InteractionCreate":
+        if self.voice_note_consent_at is not None and not self.voice_note_consent:
+            raise ValueError("voice_note_consent_at given without voice_note_consent=true")
+        return self
 
     @field_validator("attendees")
     @classmethod
@@ -87,6 +96,9 @@ class InteractionOut(BaseModel):
     next_best_action: Optional[str] = None
     outcomes: Optional[str] = None
     follow_up_actions: Optional[str] = None
+    voice_note_consent: bool = False
+    voice_note_consent_at: Optional[datetime] = None
+    unmatched_products: list = []
     compliance_flag: bool
     compliance_notes: Optional[str] = None
     created_at: datetime
@@ -103,6 +115,19 @@ class MaterialOut(BaseModel):
     id: str
     name: str
     approved: bool
+
+
+class ProductOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+
+
+class VoiceNoteSummary(BaseModel):
+    transcript: str
+    summary: str
+    consent_at: datetime
+    transcription_model: str
 
 
 class FollowUpOut(BaseModel):

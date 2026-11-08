@@ -1250,3 +1250,26 @@ textarea{
 .chat-footer input{ flex:1; min-width:0; }
 .chat-footer .btn-primary{ flex:0 0 auto; width:auto; height:40px; padding:0 18px; border-radius:10px; }
 .page-header{ margin-bottom:4px; }
+
+/* Voice note (brief mockup: "Summarize from Voice Note (Requires Consent)") */
+.voice-note{ margin-top:8px; }
+.btn-voice{
+  display:inline-flex; align-items:center; gap:8px; padding:7px 12px; font-size:12px; font-weight:600;
+  background:#f1f5f9; border:1px solid #e2e8f0; border-radius:8px; cursor:pointer; color:#334155;
+}
+.btn-voice:hover{ background:#e2e8f0; }
+.voice-panel{ margin-top:8px; padding:12px 14px; border:1px solid var(--border); border-radius:10px; background:#f8fafc; }
+.voice-consent{ display:flex; gap:8px; align-items:flex-start; font-size:13px; font-weight:600; cursor:pointer; }
+.voice-consent input{ margin-top:2px; }
+.voice-hint{ margin:6px 0 10px 24px; font-size:12px; color:var(--muted); }
+.voice-controls{ display:flex; align-items:center; gap:12px; margin-left:24px; }
+.btn-stop{ color:#b91c1c; border-color:#fecaca; }
+.voice-live{ color:#b91c1c; font-size:12px; font-weight:700; }
+.voice-status{ font-size:12px; color:var(--muted); }
+.voice-status.ok{ color:#166534; font-weight:600; }
+.voice-error{ margin:8px 0 0 24px; font-size:12px; color:var(--red); }
+.voice-transcript{ margin:8px 0 0 24px; font-size:12px; color:#334155; }
+.voice-consent-note{ margin:6px 0 0; font-size:12px; color:#166534; }
+.voice-consent input[type="checkbox"]{ width:auto; flex:0 0 auto; height:auto; padding:0; box-shadow:none; }
+.sample-error{ margin:6px 0 0; font-size:12px; }
+.unmatched-products{ color:#9a3412; font-size:13px; }

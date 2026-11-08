@@ -64,6 +64,13 @@ async def close_groq_client() -> None:
         sync_client.close()
 
 
+def get_async_groq() -> groq.AsyncGroq:
+    """The shared async Groq SDK client (chat via ChatGroq; also audio transcription)."""
+    init_groq_client()
+    assert _clients is not None
+    return _clients[1]
+
+
 def _chat(model: str, temperature: float) -> ChatGroq:
     init_groq_client()
     assert _clients is not None

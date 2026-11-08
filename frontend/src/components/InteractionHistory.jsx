@@ -168,6 +168,19 @@ export default function InteractionHistory() {
 
               )}
 
+              {item.unmatched_products?.length > 0 && (
+                <p style={{ marginTop: 8 }} className="unmatched-products">
+                  <strong>Not in product list:</strong> {item.unmatched_products.join(", ")}
+                </p>
+              )}
+
+              {item.voice_note_consent && (
+                <p style={{ marginTop: 8 }} className="voice-consent-note">
+                  🎙 Voice note: HCP consent recorded
+                  {item.voice_note_consent_at ? ` ${new Date(item.voice_note_consent_at).toLocaleString()}` : ""}
+                </p>
+              )}
+
               {item.attendees?.length > 0 && (
                 <p style={{ marginTop: 8 }}>
                   <strong>Attendees:</strong> {item.attendees.join(", ")}

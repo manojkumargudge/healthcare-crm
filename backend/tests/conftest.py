@@ -51,6 +51,11 @@ from sqlalchemy.pool import NullPool  # noqa: E402
 from app import models  # noqa: E402,F401  (registers tables on Base.metadata)
 from app.database import Base, get_db  # noqa: E402,F401
 from app.main import app  # noqa: E402
+from app.catalog import SEED_PRODUCTS  # noqa: E402
+from app.models import Product, gen_uuid, utcnow  # noqa: E402
+from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
+
+TEST_PRODUCTS = (*SEED_PRODUCTS, "A", "B", "C", "X", "DrugX", "Good", "ok")
 
 # NullPool: every session opens a fresh connection on the current event loop,
 # so pytest-asyncio's per-test loops never share an asyncpg connection.
@@ -91,6 +96,11 @@ def _block_real_groq(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(ChatGroq, "invoke", _refuse_sync)
     monkeypatch.setattr(ChatGroq, "_agenerate", _refuse)
     monkeypatch.setattr(ChatGroq, "_generate", _refuse_sync)
+    # Audio (Whisper) goes through the Groq SDK directly, not ChatGroq.
+    from groq.resources.audio.transcriptions import AsyncTranscriptions, Transcriptions
+
+    monkeypatch.setattr(AsyncTranscriptions, "create", _refuse)
+    monkeypatch.setattr(Transcriptions, "create", _refuse_sync)
 
 
 class FakeLLM:
@@ -120,6 +130,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr("app.agent.tools.ainvoke_resilient", fake)
         monkeypatch.setattr("app.agent.graph.ainvoke_resilient", fake)
         monkeypatch.setattr("app.follow_ups.ainvoke_resilient", fake)
+        monkeypatch.setattr("app.voice_notes.ainvoke_resilient", fake)
         return fake
 
     return _install
@@ -150,6 +161,12 @@ async def db(_schema: None) -> AsyncIterator[AsyncSession]:
     async with test_engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {_TABLES} RESTART IDENTITY CASCADE"))
     async with TestSessionLocal() as session:
+        # The product catalog is admin-only (no API writes), so tests start with one:
+        # the starter products plus the placeholder names tests use for samples.
+        await session.execute(
+            pg_insert(Product).values([{"id": gen_uuid(), "name": n, "created_at": utcnow()} for n in TEST_PRODUCTS])
+        )
+        await session.commit()
         yield session
 
 

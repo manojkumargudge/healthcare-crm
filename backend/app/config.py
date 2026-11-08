@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # gemma2-9b-it and llama-3.3-70b-versatile are decommissioned on Groq.
     groq_model: str = Field(default="openai/gpt-oss-120b", min_length=1)  # agent loop, recommendations
     groq_model_fast: str = Field(default="openai/gpt-oss-20b", min_length=1)  # extraction / summarization
+    # Speech-to-text for voice notes. Active Groq Whisper models (checked via the Groq
+    # /models API): whisper-large-v3-turbo (faster) and whisper-large-v3 (more accurate).
+    groq_transcribe_model: str = Field(default="whisper-large-v3-turbo", min_length=1)
 
     frontend_origin: str = "http://localhost:5173"
     backend_port: int = 8000  # compose-only (host port); declared so .env stays strict

@@ -36,7 +36,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import HCP, Interaction, FollowUp, utcnow
 from app.agent.llm import ainvoke_resilient
 from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
-from app.catalog import display_name, normalize_sentiment, resolve_attendees, resolve_materials, unapproved_materials
+from app.catalog import (
+    catalog_samples,
+    clean_names,
+    display_name,
+    normalize_sentiment,
+    resolve_attendees,
+    resolve_materials,
+    match_products,
+    unapproved_materials,
+)
 
 __all__ = ["STATE_SAMPLE_LIMITS", "build_tools", "apply_compliance"]
 
@@ -141,14 +150,20 @@ Notes:
         material_names = await resolve_materials(
             db, list(materials_shared or []) + list(data.get("materials_shared") or [])
         )
+        # Admin-only catalog: map to the closest product, keep the rest in unmatched_products.
+        product_names, unmatched = await match_products(db, data.get("products_discussed") or [])
+        samples, unmatched_samples = await catalog_samples(
+            db, coerce_samples(data.get("samples_dropped", []), source="log_interaction"), strict=False
+        )
 
         interaction = Interaction(
             hcp_id=hcp_id,
             interaction_type=interaction_type,
             channel="chat",
             interaction_date=date.today(),
-            products_discussed=data.get("products_discussed", []),
-            samples_dropped=coerce_samples(data.get("samples_dropped", []), source="log_interaction"),
+            products_discussed=product_names,
+            unmatched_products=clean_names(unmatched + unmatched_samples),
+            samples_dropped=samples,
             materials_shared=material_names,
             key_topics=data.get("key_topics", []),
             attendees=attendee_names,
@@ -171,6 +186,7 @@ Notes:
             "products_discussed": interaction.products_discussed,
             "samples_dropped": interaction.samples_dropped,
             "materials_shared": interaction.materials_shared,
+            "unmatched_products": interaction.unmatched_products,
             "attendees": interaction.attendees,
             "compliance_flag": interaction.compliance_flag,
             "compliance_notes": interaction.compliance_notes,
@@ -200,10 +216,19 @@ Notes:
         allowed_fields = {
             "interaction_type", "products_discussed", "samples_dropped",
             "materials_shared", "key_topics", "raw_notes", "hcp_sentiment", "attendees",
-            "outcomes", "follow_up_actions",
+            "outcomes", "follow_up_actions", "unmatched_products",
         }
+        new_unmatched: list[str] = []
         if "samples_dropped" in update_dict:
-            update_dict["samples_dropped"] = coerce_samples(update_dict["samples_dropped"], source="edit_interaction")
+            update_dict["samples_dropped"], miss = await catalog_samples(
+                db, coerce_samples(update_dict["samples_dropped"], source="edit_interaction"), strict=False
+            )
+            new_unmatched += miss
+        if "products_discussed" in update_dict:
+            update_dict["products_discussed"], miss = await match_products(db, update_dict["products_discussed"])
+            new_unmatched += miss
+        if new_unmatched:
+            update_dict["unmatched_products"] = clean_names(list(interaction.unmatched_products or []) + new_unmatched)
         if "attendees" in update_dict:
             update_dict["attendees"] = await resolve_attendees(db, update_dict["attendees"])
         if "materials_shared" in update_dict:
