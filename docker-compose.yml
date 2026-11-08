@@ -9,8 +9,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
       GROQ_API_KEY: ${GROQ_API_KEY:?set GROQ_API_KEY in .env}
-      GROQ_MODEL: ${GROQ_MODEL:-gemma2-9b-it}
-      GROQ_FALLBACK_MODEL: ${GROQ_FALLBACK_MODEL:-llama-3.3-70b-versatile}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      GROQ_MODEL_FAST: ${GROQ_MODEL_FAST:-openai/gpt-oss-20b}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"

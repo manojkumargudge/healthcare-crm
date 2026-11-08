@@ -67,8 +67,20 @@ class GroqCalledError(AssertionError):
     pass
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """`live` tests hit the real Groq API: skip them unless explicitly enabled."""
+    if os.environ.get("RUN_LIVE_GROQ") == "1":
+        return
+    skip = pytest.mark.skip(reason="live Groq test; set RUN_LIVE_GROQ=1 and LIVE_GROQ_API_KEY to run")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
-def _block_real_groq(monkeypatch: pytest.MonkeyPatch) -> None:
+def _block_real_groq(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if request.node.get_closest_marker("live"):
+        return  # live tests deliberately call Groq
     async def _refuse(*_a: Any, **_kw: Any) -> Any:
         raise GroqCalledError("Test attempted a real Groq call; fake the LLM instead.")
 
@@ -92,8 +104,8 @@ class FakeLLM:
         self._responses = [r if isinstance(r, AIMessage) else AIMessage(content=r) for r in responses]
         self.calls: list[dict[str, Any]] = []
 
-    async def __call__(self, messages: Any, temperature: float = 0.2, tools: Any = None, heavy: bool = False):
-        self.calls.append({"messages": messages, "temperature": temperature, "tools": tools, "heavy": heavy})
+    async def __call__(self, messages: Any, temperature: float = 0.2, tools: Any = None, fast: bool = False):
+        self.calls.append({"messages": messages, "temperature": temperature, "tools": tools, "fast": fast})
         if not self._responses:
             raise AssertionError("FakeLLM ran out of queued responses")
         return self._responses.pop(0), "fake-model"

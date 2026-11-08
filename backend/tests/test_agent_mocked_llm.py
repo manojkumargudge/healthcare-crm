@@ -40,48 +40,75 @@ class _FakeChatGroq:
         return AIMessage(content=f"from {self.model}")
 
 
+MAIN, FAST = "main-model-x", "fast-model-y"
+
+
 @pytest.fixture
 def fake_chatgroq(monkeypatch: pytest.MonkeyPatch) -> type[_FakeChatGroq]:
     _FakeChatGroq.tried = []
     _FakeChatGroq.failures = {}
     monkeypatch.setattr(llm_module, "ChatGroq", _FakeChatGroq)
+    # Pin the configured models so a developer's local .env can't change results.
+    monkeypatch.setattr(llm_module.settings, "groq_model", MAIN)
+    monkeypatch.setattr(llm_module.settings, "groq_model_fast", FAST)
     return _FakeChatGroq
 
 
-async def test_resilient_uses_primary_when_available(fake_chatgroq: type[_FakeChatGroq]) -> None:
+def test_model_chain_order(fake_chatgroq: type[_FakeChatGroq]) -> None:
+    assert llm_module.model_chain() == [MAIN, FAST]
+    assert llm_module.model_chain(fast=True) == [FAST, MAIN]
+
+
+def test_model_chain_dedupes_when_both_settings_match(
+    fake_chatgroq: type[_FakeChatGroq], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(llm_module.settings, "groq_model_fast", MAIN)
+    assert llm_module.model_chain() == [MAIN]
+
+
+async def test_resilient_uses_main_model_by_default(fake_chatgroq: type[_FakeChatGroq]) -> None:
     resp, model = await llm_module.ainvoke_resilient("hi")
-    assert model == llm_module.PRIMARY_CHAIN[0]
-    assert fake_chatgroq.tried == [model]
-    assert resp.content == f"from {model}"
+    assert model == MAIN
+    assert fake_chatgroq.tried == [MAIN]
+    assert resp.content == f"from {MAIN}"
 
 
-async def test_resilient_falls_through_on_decommissioned(fake_chatgroq: type[_FakeChatGroq]) -> None:
-    first, second = llm_module.PRIMARY_CHAIN[:2]
-    fake_chatgroq.failures = {first: RuntimeError("The model `x` has been decommissioned")}
+async def test_resilient_fast_uses_fast_model(fake_chatgroq: type[_FakeChatGroq]) -> None:
+    _resp, model = await llm_module.ainvoke_resilient("hi", fast=True)
+    assert model == FAST
+    assert fake_chatgroq.tried == [FAST]
+
+
+async def test_resilient_falls_back_to_other_model_on_decommissioned(fake_chatgroq: type[_FakeChatGroq]) -> None:
+    fake_chatgroq.failures = {MAIN: RuntimeError("The model `x` has been decommissioned")}
     _resp, model = await llm_module.ainvoke_resilient("hi")
-    assert model == second
-    assert fake_chatgroq.tried == [first, second]
-
-
-async def test_resilient_heavy_chain(fake_chatgroq: type[_FakeChatGroq]) -> None:
-    _resp, model = await llm_module.ainvoke_resilient("hi", heavy=True)
-    assert model == llm_module.HEAVY_CHAIN[0]
+    assert model == FAST
+    assert fake_chatgroq.tried == [MAIN, FAST]
 
 
 async def test_resilient_does_not_retry_other_errors(fake_chatgroq: type[_FakeChatGroq]) -> None:
-    first = llm_module.PRIMARY_CHAIN[0]
-    fake_chatgroq.failures = {first: RuntimeError("401 invalid api key")}
+    fake_chatgroq.failures = {MAIN: RuntimeError("401 invalid api key")}
     with pytest.raises(RuntimeError, match="invalid api key"):
         await llm_module.ainvoke_resilient("hi")
-    assert fake_chatgroq.tried == [first]
+    assert fake_chatgroq.tried == [MAIN]
 
 
-async def test_resilient_raises_last_error_when_chain_exhausted(fake_chatgroq: type[_FakeChatGroq]) -> None:
-    chain = llm_module._dedupe(llm_module.PRIMARY_CHAIN)
-    fake_chatgroq.failures = {m: RuntimeError(f"{m} model_not_found") for m in chain}
-    with pytest.raises(RuntimeError, match=f"{chain[-1]} model_not_found"):
+async def test_resilient_raises_last_error_when_both_models_gone(fake_chatgroq: type[_FakeChatGroq]) -> None:
+    fake_chatgroq.failures = {m: RuntimeError(f"{m} model_not_found") for m in (MAIN, FAST)}
+    with pytest.raises(RuntimeError, match=f"{FAST} model_not_found"):
         await llm_module.ainvoke_resilient("hi")
-    assert fake_chatgroq.tried == chain
+    assert fake_chatgroq.tried == [MAIN, FAST]
+
+
+async def test_extraction_uses_fast_model_and_recommendation_uses_main(db: AsyncSession, fake_llm) -> None:
+    hcp = HCP(name="Dr. Route")
+    db.add(hcp)
+    await db.commit()
+    fake = fake_llm(json.dumps({"summary": "s"}), "Bring the new study.")
+    tools = {t.name: t for t in build_tools(db)}
+    await tools["log_interaction"].coroutine(hcp_id=hcp.id, raw_text="notes")  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+    await tools["suggest_next_best_action"].coroutine(hcp_id=hcp.id)  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+    assert [c["fast"] for c in fake.calls] == [True, False]
 
 
 # ------------------------------------------------------- _extract_json ------
