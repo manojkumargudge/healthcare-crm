@@ -4,10 +4,13 @@ import { acceptFollowUp, dismissFollowUp, generateSuggestions } from '../store/f
 
 const EMPTY = []
 
-/** "AI Suggested Follow-ups" for the interaction just logged. Click one to add it. */
+/**
+ * "AI Suggested Follow-ups:" at the bottom of the Interaction Details card (as in the
+ * brief mockup): "+ action" links for the interaction just logged; click one to add it.
+ */
 export default function FollowUpSuggestions({ interactionId }) {
   const dispatch = useDispatch()
-  const items = useSelector((s) => s.followUps.byInteraction[interactionId] || EMPTY)
+  const items = useSelector((s) => (interactionId ? s.followUps.byInteraction[interactionId] : null) || EMPTY)
   const status = useSelector((s) => s.followUps.status)
   const error = useSelector((s) => s.followUps.error)
 
@@ -21,20 +24,23 @@ export default function FollowUpSuggestions({ interactionId }) {
   return (
     <section className="follow-ups" aria-label="AI Suggested Follow-ups">
       <div className="follow-ups-header">
-        <h3>AI Suggested Follow-ups</h3>
-        <button
-          type="button"
-          className="btn-link"
-          onClick={() => dispatch(generateSuggestions(interactionId))}
-          disabled={status === 'loading'}
-        >
-          {status === 'loading' ? 'Thinking…' : 'Refresh'}
-        </button>
+        <h3>AI Suggested Follow-ups:</h3>
+        {interactionId && (
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => dispatch(generateSuggestions(interactionId))}
+            disabled={status === 'loading'}
+          >
+            {status === 'loading' ? 'Thinking…' : 'Refresh'}
+          </button>
+        )}
       </div>
 
-      {status === 'failed' && <p className="follow-ups-error">Couldn’t get suggestions: {error}</p>}
-      {status !== 'failed' && error && <p className="follow-ups-error">{error}</p>}
-      {status !== 'loading' && status !== 'failed' && suggested.length === 0 && added.length === 0 && (
+      {!interactionId && <p className="follow-ups-empty">Suggestions appear here after you log the interaction.</p>}
+      {interactionId && status === 'failed' && <p className="follow-ups-error">Couldn’t get suggestions: {error}</p>}
+      {interactionId && status !== 'failed' && error && <p className="follow-ups-error">{error}</p>}
+      {interactionId && status !== 'loading' && status !== 'failed' && suggested.length === 0 && added.length === 0 && (
         <p className="follow-ups-empty">No suggestions for this interaction.</p>
       )}
 
@@ -45,11 +51,9 @@ export default function FollowUpSuggestions({ interactionId }) {
               type="button"
               className="follow-up-add"
               onClick={() => dispatch(acceptFollowUp({ id: f.id }))}
-              title="Add this follow-up"
+              title={`Add this follow-up (due ${f.due_date})`}
             >
-              <span className="follow-up-plus" aria-hidden="true">+</span>
-              <span className="follow-up-reason">{f.reason}</span>
-              <span className="follow-up-due">due {f.due_date}</span>
+              + {f.reason}
             </button>
             <button
               type="button"
@@ -62,9 +66,8 @@ export default function FollowUpSuggestions({ interactionId }) {
           </li>
         ))}
         {added.map((f) => (
-          <li key={f.id} className="follow-up added">
-            <span className="follow-up-check" aria-hidden="true">✓</span>
-            <span className="follow-up-reason">{f.reason}</span>
+          <li key={f.id} className="follow-up added" title={`Added, due ${f.due_date}`}>
+            <span className="follow-up-check" aria-hidden="true">✓</span> {f.reason}
             <span className="follow-up-due">due {f.due_date}</span>
           </li>
         ))}

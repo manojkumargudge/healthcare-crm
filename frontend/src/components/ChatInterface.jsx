@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { sendChatMessage } from "../store/chatSlice";
 import { fetchInteractions } from "../store/interactionsSlice";
-import { hcpDisplayName } from "../lib/format";
 
 export default function ChatInterface() {
   const dispatch = useDispatch();
@@ -10,10 +9,6 @@ export default function ChatInterface() {
   const { sessionId, messages, status } = useSelector((s) => s.chat);
 
   const hcpId = useSelector((s) => s.hcps.selectedId);
-
-  const hcp = useSelector((s) =>
-    s.hcps.items.find((h) => h.id === hcpId)
-  );
 
   const [draft, setDraft] = useState("");
 
@@ -50,12 +45,9 @@ export default function ChatInterface() {
 
       <div className="chat-header">
 
-        <h2>AI Assistant</h2>
+        <h2><span className="chat-header-icon" aria-hidden="true">🤖</span> AI Assistant</h2>
 
-        <p>
-          Describe your interaction naturally. The AI will summarize,
-          extract products, samples and automatically log it.
-        </p>
+        <p>Log interaction via chat</p>
 
       </div>
 
@@ -63,16 +55,10 @@ export default function ChatInterface() {
 
         {messages.length === 0 && (
 
-          <div className="chat-example">
-
-            <strong>Example</strong>
-
-            <p>
-              I met {hcpDisplayName(hcp?.name) || "Dr. Smith"} today. We discussed
-              CardioMax, shared a clinical study, left three samples
-              and scheduled a follow-up next week.
-            </p>
-
+          <div className="chat-bubble assistant chat-greeting">
+            Log interaction details here (e.g., "Met Dr. Smith, discussed
+            Product X efficacy, positive sentiment, shared brochure") or ask
+            for help.
           </div>
 
         )}
@@ -127,7 +113,7 @@ export default function ChatInterface() {
           }
           placeholder={
             hcpId
-              ? "Describe today's interaction..."
+              ? "Describe interaction..."
               : "Select an HCP first"
           }
         />

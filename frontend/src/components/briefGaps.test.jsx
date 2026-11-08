@@ -162,7 +162,8 @@ describe('StructuredForm', () => {
     // Like the real API: case-insensitive substring match on the typed text.
     api.searchMaterials.mockImplementation(async (q) => catalog.filter((m) => m.name.toLowerCase().includes(q.toLowerCase())))
     renderWithStore(<StructuredForm />)
-    const materials = screen.getByLabelText('Materials shared')
+    fireEvent.click(screen.getByRole('button', { name: /Search\/Add/ }))
+    const materials = screen.getByLabelText('Materials Shared')
     fireEvent.change(materials, { target: { value: 'de' } })
     const pendingOpt = await screen.findByRole('option', { name: /Rep slide deck/ })
     expect(pendingOpt.textContent).toContain('Pending approval')
@@ -181,10 +182,10 @@ describe('StructuredForm', () => {
     renderWithStore(<StructuredForm />)
 
     // sentiment radio: optional, selectable, clearable
-    fireEvent.click(screen.getByLabelText('Positive'))
+    fireEvent.click(screen.getByLabelText(/Positive/))
     fireEvent.click(screen.getByText('Clear'))
-    expect(screen.getByLabelText('Positive').checked).toBe(false)
-    fireEvent.click(screen.getByLabelText('Negative'))
+    expect(screen.getByLabelText(/Positive/).checked).toBe(false)
+    fireEvent.click(screen.getByLabelText(/Negative/))
 
     // attendees from HCP search
     const attendees = screen.getByLabelText('Attendees')
@@ -193,11 +194,12 @@ describe('StructuredForm', () => {
     expect(api.searchHcps).toHaveBeenCalledWith('priya')
 
     // materials: pick from catalog search
-    const materials = screen.getByLabelText('Materials shared')
+    fireEvent.click(screen.getByRole('button', { name: /Search\/Add/ }))
+    const materials = screen.getByLabelText('Materials Shared')
     fireEvent.change(materials, { target: { value: 'dosing' } })
     fireEvent.mouseDown(await screen.findByRole('option', { name: 'CardioMax dosing guide' }))
 
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Log interaction' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Log Interaction' })) })
     expect(api.createInteraction).toHaveBeenCalledWith(
       expect.objectContaining({
         hcp_id: 'h1',
@@ -213,8 +215,8 @@ describe('StructuredForm', () => {
   it('sends hcp_sentiment null when no radio is chosen', async () => {
     api.createInteraction.mockResolvedValue({ id: 'new-2', compliance_flag: false })
     renderWithStore(<StructuredForm />)
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Log interaction' })) })
-    expect(api.createInteraction).toHaveBeenCalledWith(expect.objectContaining({ hcp_sentiment: null, attendees: [] }))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Log Interaction' })) })
+    expect(api.createInteraction).toHaveBeenCalledWith(expect.objectContaining({ hcp_sentiment: null, attendees: [], interaction_type: 'Meeting' }))
   })
 })
 
@@ -225,12 +227,12 @@ describe('FollowUpSuggestions', () => {
     api.updateFollowUp.mockResolvedValue({ ...suggestion, status: 'Pending' })
     renderWithStore(<FollowUpSuggestions interactionId="i1" />)
 
-    expect(screen.getByRole('heading', { name: 'AI Suggested Follow-ups' })).toBeTruthy()
-    const add = await screen.findByTitle('Add this follow-up')
+    expect(screen.getByRole('heading', { name: 'AI Suggested Follow-ups:' })).toBeTruthy()
+    const add = await screen.findByTitle(/^Add this follow-up/)
     expect(add.textContent).toContain('Send OncoBoost Phase III PDF')
     await act(async () => { fireEvent.click(add) })
     expect(api.updateFollowUp).toHaveBeenCalledWith('f1', { status: 'Pending' })
-    await waitFor(() => expect(screen.queryByTitle('Add this follow-up')).toBeNull())
+    await waitFor(() => expect(screen.queryByTitle(/^Add this follow-up/)).toBeNull())
     expect(screen.getByText('✓')).toBeTruthy()
   })
 
@@ -248,5 +250,65 @@ describe('hcpDisplayName', () => {
     expect(hcpDisplayName('dr Anjali Rao')).toBe('dr Anjali Rao')
     expect(hcpDisplayName('Anjali Rao')).toBe('Dr. Anjali Rao')
     expect(hcpDisplayName('')).toBe('')
+  })
+})
+
+describe('StructuredForm matches the brief mockup', () => {
+  it('has the mockup fields, labels and empty states', () => {
+    renderWithStore(<StructuredForm />)
+    expect(screen.getByText('Interaction Details')).toBeTruthy()
+    for (const label of ['HCP Name', 'Interaction Type', 'Date', 'Time', 'Attendees', 'Topics Discussed', 'Outcomes', 'Follow-up Actions']) {
+      expect(screen.getByLabelText(label)).toBeTruthy()
+    }
+    expect(screen.getByText('Materials Shared / Samples Distributed')).toBeTruthy()
+    expect(screen.getByText('No materials added')).toBeTruthy()
+    expect(screen.getByText('No samples added')).toBeTruthy()
+    expect(screen.getByText('Observed/Inferred HCP Sentiment')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'AI Suggested Follow-ups:' })).toBeTruthy()
+    expect(screen.getByText(/Suggestions appear here after you log/)).toBeTruthy()
+    expect(screen.getByPlaceholderText('Search or select HCP...')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Enter names or search...')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Enter key discussion points...')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Key outcomes or agreements...')).toBeTruthy()
+    expect(screen.getByPlaceholderText('Enter next steps or tasks...')).toBeTruthy()
+    expect(screen.getByLabelText('Interaction Type').value).toBe('Meeting')
+  })
+
+  it('sends time, topics (as notes), outcomes and follow-up actions', async () => {
+    api.createInteraction.mockResolvedValue({ id: 'n3', compliance_flag: false })
+    renderWithStore(<StructuredForm />)
+    fireEvent.change(screen.getByLabelText('Time'), { target: { value: '19:36' } })
+    fireEvent.change(screen.getByLabelText('Topics Discussed'), { target: { value: 'Efficacy data' } })
+    fireEvent.change(screen.getByLabelText('Outcomes'), { target: { value: 'Agreed to trial' } })
+    fireEvent.change(screen.getByLabelText('Follow-up Actions'), { target: { value: 'Send PDF' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Log Interaction' })) })
+    expect(api.createInteraction).toHaveBeenCalledWith(expect.objectContaining({
+      interaction_time: '19:36', raw_notes: 'Efficacy data', outcomes: 'Agreed to trial', follow_up_actions: 'Send PDF',
+    }))
+  })
+
+  it('Add Sample opens the sample row and lists added samples', () => {
+    renderWithStore(<StructuredForm />)
+    fireEvent.click(screen.getByRole('button', { name: /Add Sample/ }))
+    fireEvent.change(screen.getByLabelText('Sample product'), { target: { value: 'CardioMax' } })
+    fireEvent.change(screen.getByLabelText('Sample quantity'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(screen.getByText('CardioMax × 2')).toBeTruthy()
+    expect(screen.queryByText('No samples added')).toBeNull()
+  })
+
+  it('HCP Name picker selects the HCP for the form', () => {
+    const store = configureStore({
+      reducer: { hcps: hcpReducer, interactions: interactionsReducer, chat: chatReducer, followUps: followUpsReducer },
+      preloadedState: { hcps: { items: [{ id: 'h1', name: 'Dr. A' }, { id: 'h2', name: 'Dr. Priya Nair', specialty: 'Oncologist' }], selectedId: 'h1', status: 'succeeded' } },
+    })
+    renderWithStore(<StructuredForm />, store)
+    const input = screen.getByLabelText('HCP Name')
+    expect(input.value).toBe('Dr. A')
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: 'priya' } })
+    fireEvent.mouseDown(screen.getByRole('option', { name: /Dr. Priya Nair/ }))
+    expect(store.getState().hcps.selectedId).toBe('h2')
+    expect(input.value).toBe('Dr. Priya Nair')
   })
 })

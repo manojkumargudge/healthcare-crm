@@ -376,3 +376,49 @@ async def test_chat_log_with_attendees_and_materials(client: httpx.AsyncClient, 
     assert body["interaction"]["attendees"] == ["Nurse Kim"]
     assert body["interaction"]["materials_shared"] == ["CardioMax patient brochure"]
     _ = datetime.now(timezone.utc), FollowUp  # keep imports used for readability of the module header
+
+
+# ======================================================== mockup form fields
+async def test_create_with_time_outcomes_and_follow_up_actions(client: httpx.AsyncClient, hcp: dict) -> None:
+    body = (
+        await client.post(
+            "/api/interactions",
+            json={
+                "hcp_id": hcp["id"],
+                "interaction_type": "Meeting",
+                "interaction_date": "2025-04-19",
+                "interaction_time": "19:36",
+                "raw_notes": "Discussed OncoBoost efficacy",
+                "outcomes": "Agreed to trial with 3 patients",
+                "follow_up_actions": "Send Phase III PDF",
+            },
+        )
+    ).json()
+    assert body["interaction_type"] == "Meeting"
+    assert body["interaction_time"] == "19:36:00"
+    assert body["outcomes"] == "Agreed to trial with 3 patients"
+    assert body["follow_up_actions"] == "Send Phase III PDF"
+
+
+async def test_time_is_optional_and_validated(client: httpx.AsyncClient, hcp: dict) -> None:
+    assert (await client.post("/api/interactions", json={"hcp_id": hcp["id"]})).json()["interaction_time"] is None
+    resp = await client.post("/api/interactions", json={"hcp_id": hcp["id"], "interaction_time": "25:99"})
+    assert resp.status_code == 422
+
+
+async def test_patch_outcomes_is_audited(client: httpx.AsyncClient, hcp: dict) -> None:
+    created = (await client.post("/api/interactions", json={"hcp_id": hcp["id"], "outcomes": "old"})).json()
+    body = (await client.patch(f"/api/interactions/{created['id']}", json={"outcomes": "new"})).json()
+    assert body["outcomes"] == "new"
+    assert body["edit_history"][0]["before"] == {"outcomes": "old"}
+
+
+async def test_log_tool_extracts_outcomes_and_actions(db: AsyncSession, fake_llm) -> None:
+    hcp = HCP(name="Dr. O")
+    db.add(hcp)
+    await db.commit()
+    fake_llm(json.dumps({"summary": "s", "outcomes": "Will trial it", "follow_up_actions": ["not a string"]}))
+    out = await _call(db, "log_interaction", hcp_id=hcp.id, raw_text="notes")
+    row = await db.get(Interaction, out["interaction_id"])
+    assert row is not None
+    assert (row.outcomes, row.follow_up_actions) == ("Will trial it", None)

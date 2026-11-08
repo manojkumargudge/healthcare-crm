@@ -1,6 +1,7 @@
 import uuid
-from datetime import datetime, date, timezone
-from sqlalchemy import String, Text, Date, DateTime, ForeignKey, JSON, Float, Boolean, Index, false, func
+from typing import Optional
+from datetime import datetime, date, time, timezone
+from sqlalchemy import String, Text, Date, DateTime, Time, ForeignKey, JSON, Float, Boolean, Index, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -41,6 +42,7 @@ class Interaction(Base):
     interaction_type: Mapped[str] = mapped_column(String(50), default="Visit")  # Visit/Call/Email/Sample Drop/Conference
     channel: Mapped[str] = mapped_column(String(20), default="form")  # "form" or "chat"
     interaction_date: Mapped[date] = mapped_column(Date, default=date.today)
+    interaction_time: Mapped[Optional[time]] = mapped_column(Time, nullable=True)
 
     products_discussed: Mapped[list] = mapped_column(JSON, default=list)
     samples_dropped: Mapped[list] = mapped_column(JSON, default=list)  # [{"product": "..", "qty": n}]
@@ -54,6 +56,8 @@ class Interaction(Base):
     raw_notes: Mapped[str] = mapped_column(Text, nullable=True)  # original free-text / chat transcript
     ai_summary: Mapped[str] = mapped_column(Text, nullable=True)  # LLM-generated summary
     next_best_action: Mapped[str] = mapped_column(Text, nullable=True)
+    outcomes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # "Outcomes" in the form
+    follow_up_actions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # free-text next steps
 
     compliance_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     compliance_notes: Mapped[str] = mapped_column(Text, nullable=True)

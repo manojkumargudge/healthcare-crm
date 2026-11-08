@@ -57,7 +57,9 @@ Interaction ({interaction.interaction_type}, {interaction.interaction_date}):
 - Materials shared: {", ".join(interaction.materials_shared or []) or "none"}
 - Attendees: {", ".join(interaction.attendees or []) or "none"}
 - Sentiment: {interaction.hcp_sentiment or "unknown"}
-- Notes: {interaction.raw_notes or interaction.ai_summary or "none"}
+- Topics discussed / notes: {interaction.raw_notes or interaction.ai_summary or "none"}
+- Outcomes: {interaction.outcomes or "none"}
+- Rep's planned follow-up actions: {interaction.follow_up_actions or "none"}
 
 Suggest up to {MAX_SUGGESTIONS} concrete follow-up actions for the rep. Return ONLY JSON:
 {{"follow_ups": [{{"reason": "short imperative action, e.g. 'Send OncoBoost Phase III PDF'", "days_from_now": integer 0-90}}]}}"""

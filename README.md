@@ -11,6 +11,8 @@ Both paths write to the same tables and apply the same sample validation and com
 
 This is a working prototype. There is no authentication; see [Security notes](#security-notes).
 
+The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](docs/brief-mockup.png)); see [`docs/screenshots/form-vs-mockup.png`](docs/screenshots/form-vs-mockup.png) for a side-by-side. Not built yet: the mockup's "Summarize from Voice Note (Requires Consent)" button (planned).
+
 ## Architecture
 
 ```
@@ -178,6 +180,7 @@ There is no Alembic yet. Schema changes are hand-written, idempotent SQL files i
 | `002_chat_messages_dedupe.sql` | Adds `chat_messages.tool_call_id` and removes duplicate tool rows left by an old chat bug. Only tool rows are deduplicated; repeated user/assistant messages are real and kept. |
 | `003_attendees_materials.sql` | Adds `interactions.attendees` and the `materials` catalog table, and copies existing free-text materials into the catalog. |
 | `004_materials_approval.sql` | Adds `materials.approved`. Materials that existed when the column was added (starter catalog and migrated tags) are approved; materials added afterwards start as pending. Also makes `attendees` and `materials.created_at` NOT NULL. |
+| `005_interaction_time_outcomes.sql` | Adds `interaction_time`, `outcomes` and `follow_up_actions` to interactions (fields from the brief's form). |
 
 Every file is safe to run more than once. Back up first, then apply all of them:
 

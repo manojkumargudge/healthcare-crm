@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Annotated, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -33,6 +33,7 @@ class InteractionCreate(BaseModel):
     interaction_type: str = "Visit"
     channel: str = "form"
     interaction_date: Optional[date] = None
+    interaction_time: Optional[time] = None
     products_discussed: list[str] = []
     samples_dropped: list[SampleDrop] = []
     materials_shared: list[str] = []
@@ -42,6 +43,8 @@ class InteractionCreate(BaseModel):
     # stored label is exactly this and sentiment_score stays null.
     hcp_sentiment: Optional[Sentiment] = None
     raw_notes: Optional[str] = None
+    outcomes: Optional[str] = None
+    follow_up_actions: Optional[str] = None
 
     @field_validator("attendees")
     @classmethod
@@ -57,6 +60,8 @@ class InteractionUpdate(BaseModel):
     key_topics: Optional[list[str]] = None
     attendees: Optional[list[Name]] = Field(default=None, max_length=50)
     raw_notes: Optional[str] = None
+    outcomes: Optional[str] = None
+    follow_up_actions: Optional[str] = None
     hcp_sentiment: Optional[Sentiment] = None  # manual label: clears the LLM sentiment_score
     edited_by: Optional[str] = "field_rep"
     edit_reason: Optional[str] = None
@@ -69,6 +74,7 @@ class InteractionOut(BaseModel):
     interaction_type: str
     channel: str
     interaction_date: date
+    interaction_time: Optional[time] = None
     products_discussed: list
     samples_dropped: list
     materials_shared: list
@@ -79,6 +85,8 @@ class InteractionOut(BaseModel):
     raw_notes: Optional[str] = None
     ai_summary: Optional[str] = None
     next_best_action: Optional[str] = None
+    outcomes: Optional[str] = None
+    follow_up_actions: Optional[str] = None
     compliance_flag: bool
     compliance_notes: Optional[str] = None
     created_at: datetime

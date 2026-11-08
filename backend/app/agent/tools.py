@@ -93,7 +93,7 @@ def build_tools(db: AsyncSession) -> list[StructuredTool]:
     class LogInteractionArgs(BaseModel):
         hcp_id: str = Field(description="ID of the HCP this interaction is with")
         raw_text: str = Field(description="Free-text notes or chat transcript describing what happened in the interaction")
-        interaction_type: str = Field(default="Visit", description="One of Visit, Call, Email, Sample Drop, Conference")
+        interaction_type: str = Field(default="Visit", description="One of Meeting, Visit, Call, Email, Sample Drop, Conference")
         attendees: Optional[list[str]] = Field(
             default=None, description="Names of other people present (colleagues, other HCPs), if the rep mentioned any"
         )
@@ -122,6 +122,8 @@ Extract structured data and return ONLY valid JSON, no prose, no markdown fences
   "materials_shared": ["list of any leave-behinds, brochures, studies mentioned"],
   "key_topics": ["short topic tags, e.g. 'efficacy data', 'side effects', 'pricing'"],
   "attendees": ["names of other people present besides the rep and {display_name(hcp.name)}"],
+  "outcomes": "key outcomes or agreements, one or two sentences, or null",
+  "follow_up_actions": "next steps or tasks the rep mentioned, or null",
   "hcp_sentiment": "Positive | Neutral | Negative",
   "sentiment_score": float between -1.0 and 1.0
 }}
@@ -153,6 +155,8 @@ Notes:
             hcp_sentiment=sentiment,
             sentiment_score=data.get("sentiment_score") if sentiment else None,
             raw_notes=raw_text,
+            outcomes=data.get("outcomes") if isinstance(data.get("outcomes"), str) else None,
+            follow_up_actions=data.get("follow_up_actions") if isinstance(data.get("follow_up_actions"), str) else None,
             ai_summary=data.get("summary"),
         )
         await apply_compliance(db, interaction, hcp)
@@ -179,7 +183,7 @@ Notes:
         updates: str = Field(
             description="JSON string of fields to update, e.g. '{\"hcp_sentiment\": \"Positive\"}'. Editable: "
             "interaction_type, products_discussed, samples_dropped, materials_shared, key_topics, raw_notes, "
-            "hcp_sentiment (Positive/Neutral/Negative), attendees (list of names)"
+            "hcp_sentiment (Positive/Neutral/Negative), attendees (list of names), outcomes, follow_up_actions"
         )
         edit_reason: Optional[str] = Field(default=None, description="Why this edit is being made")
 
@@ -196,6 +200,7 @@ Notes:
         allowed_fields = {
             "interaction_type", "products_discussed", "samples_dropped",
             "materials_shared", "key_topics", "raw_notes", "hcp_sentiment", "attendees",
+            "outcomes", "follow_up_actions",
         }
         if "samples_dropped" in update_dict:
             update_dict["samples_dropped"] = coerce_samples(update_dict["samples_dropped"], source="edit_interaction")
