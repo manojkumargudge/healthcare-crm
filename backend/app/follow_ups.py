@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.llm import ainvoke_resilient
 from app.agent.tools import _extract_json
+from app.catalog import display_name
 from app.models import HCP, FollowUp, Interaction, utcnow
 
 logger = logging.getLogger("hcp_crm.follow_ups")
@@ -49,7 +50,7 @@ async def suggest_follow_ups(db: AsyncSession, interaction: Interaction, hcp: HC
     in the LLM output are skipped.
     """
     prompt = f"""You are assisting a pharmaceutical field rep after an interaction with an HCP.
-HCP: Dr. {hcp.name}, {hcp.specialty or "specialty unknown"}, tier {hcp.tier}.
+HCP: {display_name(hcp.name)}, {hcp.specialty or "specialty unknown"}, tier {hcp.tier}.
 Interaction ({interaction.interaction_type}, {interaction.interaction_date}):
 - Products discussed: {", ".join(interaction.products_discussed or []) or "none"}
 - Topics: {", ".join(interaction.key_topics or []) or "none"}

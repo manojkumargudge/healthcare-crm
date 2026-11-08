@@ -5,11 +5,14 @@ import { useEffect, useRef, useState } from 'react'
  *
  * props:
  *   values, onChange      selected strings
- *   search(q) -> Promise<string[]>   suggestions for the typed text
+ *   search(q) -> Promise<Array<string | {value, badge?}>>   suggestions; `badge` is shown
+ *                         next to the option and on its chip (e.g. "Pending approval")
  *   allowCreate           Enter on text with no exact match adds it as typed
- *   onCreate(name) -> Promise<string>  optional; returns the canonical name to add
+ *   onCreate(name) -> Promise<string | {value, badge?}>  optional; returns the canonical entry
  *   createLabel(q)        text for the "add new" option
  */
+const normalize = (o) => (typeof o === 'string' ? { value: o } : o)
+
 export default function SearchableMultiSelect({
   id,
   values,
@@ -22,7 +25,8 @@ export default function SearchableMultiSelect({
   debounceMs = 200,
 }) {
   const [query, setQuery] = useState('')
-  const [options, setOptions] = useState([])
+  const [options, setOptions] = useState([]) // [{value, badge?}]
+  const [badges, setBadges] = useState({}) // value -> badge, remembered for chips
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
   const requestId = useRef(0)
@@ -40,19 +44,30 @@ export default function SearchableMultiSelect({
   }, [open])
 
   const selectedLower = values.map((v) => v.toLowerCase())
-  const visible = options.filter((o) => !selectedLower.includes(o.toLowerCase()))
   const q = query.trim()
-  const exact = visible.some((o) => o.toLowerCase() === q.toLowerCase()) || selectedLower.includes(q.toLowerCase())
+  // Only options matching the *current* text: results for an earlier query may still be
+  // in state until the debounced search returns, and Enter must not pick one of those.
+  const visible = options.filter(
+    (o) => !selectedLower.includes(o.value.toLowerCase()) && o.value.toLowerCase().includes(q.toLowerCase())
+  )
+  const exact =
+    options.some((o) => o.value.toLowerCase() === q.toLowerCase()) || selectedLower.includes(q.toLowerCase())
   const showCreate = allowCreate && q && !exact
-  const items = [...visible.map((label) => ({ label, value: label })), ...(showCreate ? [{ label: createLabel(q), value: q, create: true }] : [])]
+  const items = [
+    ...visible.map((o) => ({ label: o.value, value: o.value, badge: o.badge })),
+    ...(showCreate ? [{ label: createLabel(q), value: q, create: true }] : []),
+  ]
 
   useEffect(() => {
     if (!open) return undefined
     const mine = ++requestId.current
     const t = setTimeout(async () => {
       try {
-        const results = await search(q)
-        if (mine === requestId.current) setOptions(results)
+        const results = (await search(q)).map(normalize)
+        if (mine === requestId.current) {
+          setOptions(results)
+          remember(results)
+        }
       } catch {
         if (mine === requestId.current) setOptions([])
       }
@@ -61,14 +76,21 @@ export default function SearchableMultiSelect({
   }, [q, open, search, debounceMs])
 
   const add = async (item) => {
-    let name = item.value
-    if (item.create && onCreate) name = await onCreate(item.value)
+    let entry = { value: item.value, badge: item.badge }
+    if (item.create && onCreate) entry = normalize(await onCreate(item.value))
+    remember([entry])
+    const name = entry.value
     if (name && !values.some((v) => v.toLowerCase() === name.toLowerCase())) onChange([...values, name])
     setQuery('')
     setActive(0)
   }
 
   const remove = (v) => onChange(values.filter((x) => x !== v))
+
+  function remember(entries) {
+    const withBadge = entries.filter((e) => e.badge)
+    if (withBadge.length) setBadges((b) => ({ ...b, ...Object.fromEntries(withBadge.map((e) => [e.value, e.badge])) }))
+  }
 
   const onKeyDown = (e) => {
     if (e.key === 'ArrowDown') {
@@ -95,6 +117,7 @@ export default function SearchableMultiSelect({
         {values.map((v) => (
           <div className="chip" key={v}>
             <span>{v}</span>
+            {badges[v] && <span className="badge-pending">{badges[v]}</span>}
             <button type="button" aria-label={`Remove ${v}`} onClick={() => remove(v)}>×</button>
           </div>
         ))}
@@ -125,6 +148,7 @@ export default function SearchableMultiSelect({
               onMouseEnter={() => setActive(i)}
             >
               {item.label}
+              {item.badge && <span className="badge-pending">{item.badge}</span>}
             </li>
           ))}
         </ul>

@@ -46,9 +46,10 @@ async def test_create_full_interaction_roundtrip(client: httpx.AsyncClient, hcp:
     body = fetched.json()
     for key, value in payload.items():
         assert body[key] == value
-    # Karnataka -> default limit (4); 2 units is fine.
-    assert body["compliance_flag"] is False
-    assert body["compliance_notes"] == "No compliance issues detected."
+    # Karnataka -> default limit (4); 2 units is fine. But "Phase III brochure" is new to
+    # the catalog, so it was added unapproved and compliance flags it.
+    assert body["compliance_flag"] is True
+    assert body["compliance_notes"] == "Materials pending approval: Phase III brochure"
 
 
 async def test_create_runs_compliance_and_flags_over_limit(client: httpx.AsyncClient, make_hcp) -> None:

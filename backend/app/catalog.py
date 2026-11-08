@@ -7,9 +7,10 @@ same canonical values.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Iterable, Literal, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,9 +80,16 @@ async def resolve_attendees(db: AsyncSession, names: Optional[Iterable[Any]]) ->
     return clean_names(canonical.get(n.lower(), n) for n in cleaned)
 
 
+def display_name(name: Optional[str]) -> str:
+    """HCP name with exactly one "Dr." prefix (seeded names already include it)."""
+    name = (name or "").strip()
+    return name if re.match(r"(?i)^dr\.?\s", name) else f"Dr. {name}"
+
+
 async def resolve_materials(db: AsyncSession, names: Optional[Iterable[Any]]) -> list[str]:
     """Map material names to catalog entries (case-insensitive), adding unknown ones to the catalog.
 
+    New entries are unapproved ("Pending approval") until compliance approves them.
     Does not commit; the caller's transaction commits the catalog rows with the interaction.
     """
     cleaned = clean_names(names)
@@ -89,7 +97,7 @@ async def resolve_materials(db: AsyncSession, names: Optional[Iterable[Any]]) ->
         return []
     await db.execute(
         pg_insert(Material)
-        .values([{"id": gen_uuid(), "name": n, "created_at": utcnow()} for n in cleaned])
+        .values([{"id": gen_uuid(), "name": n, "approved": False, "created_at": utcnow()} for n in cleaned])
         .on_conflict_do_nothing()
     )
     rows = await db.execute(select(Material.name).where(func.lower(Material.name).in_([n.lower() for n in cleaned])))
@@ -97,12 +105,32 @@ async def resolve_materials(db: AsyncSession, names: Optional[Iterable[Any]]) ->
     return [canonical.get(n.lower(), n) for n in cleaned]
 
 
+async def unapproved_materials(db: AsyncSession, names: Optional[Iterable[Any]]) -> list[str]:
+    """The subset of `names` whose catalog entry is not approved (catalog spelling, input order)."""
+    cleaned = clean_names(names)
+    if not cleaned:
+        return []
+    rows = await db.execute(
+        select(Material.name).where(
+            func.lower(Material.name).in_([n.lower() for n in cleaned]), Material.approved.is_(False)
+        )
+    )
+    pending = {name.lower(): name for (name,) in rows.all()}
+    return [pending[n.lower()] for n in cleaned if n.lower() in pending]
+
+
 async def seed_materials(db: AsyncSession) -> int:
-    """Insert the starter catalog if missing (idempotent). Returns rows inserted."""
+    """Insert the starter catalog as approved (idempotent). A starter name a rep added
+    earlier is marked approved. Returns rows inserted or updated."""
+    stmt = pg_insert(Material).values(
+        [{"id": gen_uuid(), "name": n, "approved": True, "created_at": utcnow()} for n in SEED_MATERIALS]
+    )
     result = await db.execute(
-        pg_insert(Material)
-        .values([{"id": gen_uuid(), "name": n, "created_at": utcnow()} for n in SEED_MATERIALS])
-        .on_conflict_do_nothing()
+        stmt.on_conflict_do_update(
+            index_elements=[text("lower(name)")],
+            set_={"approved": True},
+            where=Material.approved.is_(False),
+        )
     )
     await db.commit()
     return int(result.rowcount or 0)  # type: ignore[attr-defined]  # CursorResult has rowcount; Result stub lacks it

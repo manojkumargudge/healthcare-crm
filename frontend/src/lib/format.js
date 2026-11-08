@@ -14,3 +14,10 @@ export function sentimentClass(sentiment) {
   if (sentiment === 'Negative') return 'negative'
   return 'neutral'
 }
+
+/** HCP name with exactly one "Dr." prefix (seeded names already include it). */
+export function hcpDisplayName(name) {
+  const n = (name || '').trim()
+  if (!n) return ''
+  return /^dr\.?\s/i.test(n) ? n : `Dr. ${n}`
+}

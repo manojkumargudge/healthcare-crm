@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { sendChatMessage } from "../store/chatSlice";
 import { fetchInteractions } from "../store/interactionsSlice";
+import { hcpDisplayName } from "../lib/format";
 
 export default function ChatInterface() {
   const dispatch = useDispatch();
@@ -67,7 +68,7 @@ export default function ChatInterface() {
             <strong>Example</strong>
 
             <p>
-              I met Dr. {hcp?.name || "Smith"} today. We discussed
+              I met {hcpDisplayName(hcp?.name) || "Dr. Smith"} today. We discussed
               CardioMax, shared a clinical study, left three samples
               and scheduled a follow-up next week.
             </p>

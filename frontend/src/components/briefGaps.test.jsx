@@ -45,8 +45,8 @@ const renderWithStore = (ui, store = makeStore()) => ({ store, ...render(<Provid
 beforeEach(() => {
   vi.clearAllMocks()
   api.searchHcps.mockResolvedValue([{ id: 'h2', name: 'Dr. Priya Nair' }, { id: 'h3', name: 'Dr. Raj Patel' }])
-  api.searchMaterials.mockResolvedValue([{ id: 'm1', name: 'CardioMax dosing guide' }])
-  api.createMaterial.mockImplementation(async (name) => ({ id: 'm9', name: name.trim() }))
+  api.searchMaterials.mockResolvedValue([{ id: 'm1', name: 'CardioMax dosing guide', approved: true }])
+  api.createMaterial.mockImplementation(async (name) => ({ id: 'm9', name: name.trim(), approved: false }))
   api.suggestFollowUps.mockResolvedValue([])
   api.listFollowUps.mockResolvedValue([])
 })
@@ -131,6 +131,20 @@ describe('SearchableMultiSelect', () => {
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull())
   })
 
+  it('never offers stale results from an earlier query (Enter adds the typed text)', async () => {
+    const onChange = vi.fn()
+    // Slow search: results for "card" are still in state while the user types a new name.
+    const search = vi.fn(async (q) => (q === 'card' ? ['CardioMax dosing guide'] : new Promise(() => {})))
+    render(<SearchableMultiSelect id="s" values={[]} onChange={onChange} search={search} debounceMs={0} />)
+    const input = screen.getByRole('combobox')
+    fireEvent.change(input, { target: { value: 'card' } })
+    await screen.findByRole('option', { name: 'CardioMax dosing guide' })
+    fireEvent.change(input, { target: { value: 'New thing' } })
+    expect(screen.queryByRole('option', { name: 'CardioMax dosing guide' })).toBeNull()
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(onChange).toHaveBeenCalledWith(['New thing'])
+  })
+
   it('does not offer "Add" when free text is disallowed', async () => {
     render(<SearchableMultiSelect id="x" values={[]} onChange={vi.fn()} search={async () => []} allowCreate={false} debounceMs={0} />)
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'zzz' } })
@@ -140,6 +154,28 @@ describe('SearchableMultiSelect', () => {
 })
 
 describe('StructuredForm', () => {
+  it('marks unapproved and newly added materials "Pending approval"', async () => {
+    const catalog = [
+      { id: 'm1', name: 'CardioMax dosing guide', approved: true },
+      { id: 'm2', name: 'Rep slide deck', approved: false },
+    ]
+    // Like the real API: case-insensitive substring match on the typed text.
+    api.searchMaterials.mockImplementation(async (q) => catalog.filter((m) => m.name.toLowerCase().includes(q.toLowerCase())))
+    renderWithStore(<StructuredForm />)
+    const materials = screen.getByLabelText('Materials shared')
+    fireEvent.change(materials, { target: { value: 'de' } })
+    const pendingOpt = await screen.findByRole('option', { name: /Rep slide deck/ })
+    expect(pendingOpt.textContent).toContain('Pending approval')
+    expect(screen.getByRole('option', { name: /CardioMax dosing guide/ }).textContent).not.toContain('Pending')
+
+    fireEvent.change(materials, { target: { value: 'Brand new leave-behind' } })
+    await screen.findByRole('option', { name: /Add "Brand new leave-behind"/ })
+    await act(async () => { fireEvent.keyDown(materials, { key: 'Enter' }) })
+    expect(api.createMaterial).toHaveBeenCalledWith('Brand new leave-behind')
+    const chip = screen.getByText('Brand new leave-behind').closest('.chip')
+    expect(chip.textContent).toContain('Pending approval')
+  })
+
   it('sends the optional sentiment radio, attendees and catalog materials', async () => {
     api.createInteraction.mockResolvedValue({ id: 'new-1', compliance_flag: false })
     renderWithStore(<StructuredForm />)
@@ -202,5 +238,15 @@ describe('FollowUpSuggestions', () => {
     api.suggestFollowUps.mockRejectedValue(new Error('API 502: groq down'))
     renderWithStore(<FollowUpSuggestions interactionId="i2" />)
     expect(await screen.findByText(/Couldn’t get suggestions: API 502/)).toBeTruthy()
+  })
+})
+
+describe('hcpDisplayName', () => {
+  it('adds "Dr." only when the name does not already have it', async () => {
+    const { hcpDisplayName } = await import('../lib/format')
+    expect(hcpDisplayName('Dr. Anjali Rao')).toBe('Dr. Anjali Rao')
+    expect(hcpDisplayName('dr Anjali Rao')).toBe('dr Anjali Rao')
+    expect(hcpDisplayName('Anjali Rao')).toBe('Dr. Anjali Rao')
+    expect(hcpDisplayName('')).toBe('')
   })
 })

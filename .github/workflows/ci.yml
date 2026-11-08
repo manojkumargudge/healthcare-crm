@@ -60,6 +60,11 @@ jobs:
       - name: Mypy
         run: mypy
 
+      - name: Migrations from empty DB match models (drift check)
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: python -m app.db_migrations check-fresh
+
       - name: Pytest
         run: pytest -rxX -v
 

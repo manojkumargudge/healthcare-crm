@@ -8,6 +8,8 @@ import SearchableMultiSelect from './SearchableMultiSelect'
 import FollowUpSuggestions from './FollowUpSuggestions'
 
 const INTERACTION_TYPES = ['Visit', 'Call', 'Email', 'Sample Drop', 'Conference']
+// Rep-added materials need compliance approval; using them flags the interaction.
+const PENDING = 'Pending approval'
 
 export default function StructuredForm() {
   const dispatch = useDispatch()
@@ -30,8 +32,9 @@ export default function StructuredForm() {
     async (q) => (await api.searchHcps(q)).map((h) => h.name).filter(Boolean),
     []
   )
-  const searchMaterials = useCallback(async (q) => (await api.searchMaterials(q)).map((m) => m.name), [])
-  const createMaterial = useCallback(async (name) => (await api.createMaterial(name)).name, [])
+  const toOption = (m) => ({ value: m.name, badge: m.approved ? undefined : PENDING })
+  const searchMaterials = useCallback(async (q) => (await api.searchMaterials(q)).map(toOption), [])
+  const createMaterial = useCallback(async (name) => toOption(await api.createMaterial(name)), [])
 
   const addSample = () => {
     if (!sampleDraft.product.trim()) return

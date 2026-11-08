@@ -1179,3 +1179,8 @@ textarea{
 .follow-up-check{ color:var(--green); font-weight:800; }
 .follow-ups-empty, .follow-ups-error{ color:var(--muted); font-size:13px; margin:0 0 8px; }
 .follow-ups-error{ color:var(--red); }
+
+.badge-pending{
+    margin-left:6px; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700;
+    background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; white-space:nowrap;
+}

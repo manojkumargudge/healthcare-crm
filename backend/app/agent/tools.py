@@ -36,23 +36,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import HCP, Interaction, FollowUp, utcnow
 from app.agent.llm import ainvoke_resilient
 from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
-from app.catalog import normalize_sentiment, resolve_attendees, resolve_materials
+from app.catalog import display_name, normalize_sentiment, resolve_attendees, resolve_materials, unapproved_materials
 
 __all__ = ["STATE_SAMPLE_LIMITS", "build_tools", "apply_compliance"]
 
 
-def apply_compliance(interaction: Interaction, hcp: HCP) -> None:
-    """Set compliance_flag/notes on `interaction` from its samples (no commit).
+async def apply_compliance(db: AsyncSession, interaction: Interaction, hcp: HCP) -> None:
+    """Set compliance_flag/notes from samples and materials (no commit).
 
-    No samples -> not flagged and no notes, matching what create has always
-    stored for sample-free interactions.
+    Flags sample quantities over the state limit and materials whose catalog
+    entry is not yet approved. No samples and no pending materials -> not
+    flagged and no notes, matching what create has always stored.
     """
+    issues: list[str] = []
+    checked = False
     if interaction.samples_dropped:
+        checked = True
         result = evaluate_sample_compliance(hcp.state, interaction.samples_dropped)
-        interaction.compliance_flag = result["compliance_flag"]
-        interaction.compliance_notes = result["compliance_notes"]
+        if result["compliance_flag"]:
+            issues.append(result["compliance_notes"])
+    pending = await unapproved_materials(db, interaction.materials_shared)
+    if pending:
+        issues.append(f"Materials pending approval: {', '.join(pending)}")
+    interaction.compliance_flag = bool(issues)
+    if issues:
+        interaction.compliance_notes = "; ".join(issues)
+    elif checked:
+        interaction.compliance_notes = "No compliance issues detected."
     else:
-        interaction.compliance_flag = False
         interaction.compliance_notes = None  # type: ignore[assignment]  # column is nullable=True but annotated Mapped[str]
 
 
@@ -102,7 +113,7 @@ def build_tools(db: AsyncSession) -> list[StructuredTool]:
             return json.dumps({"error": f"No HCP found with id {hcp_id}"})
 
         extraction_prompt = f"""You are a pharmaceutical CRM data-extraction assistant.
-Read the field rep's notes below about a visit with Dr. {hcp.name} ({hcp.specialty or "unknown specialty"}).
+Read the field rep's notes below about a visit with {display_name(hcp.name)} ({hcp.specialty or "unknown specialty"}).
 Extract structured data and return ONLY valid JSON, no prose, no markdown fences, matching this schema:
 {{
   "summary": "2-3 sentence professional summary of the interaction",
@@ -110,7 +121,7 @@ Extract structured data and return ONLY valid JSON, no prose, no markdown fences
   "samples_dropped": [{{"product": "name", "qty": integer}}],
   "materials_shared": ["list of any leave-behinds, brochures, studies mentioned"],
   "key_topics": ["short topic tags, e.g. 'efficacy data', 'side effects', 'pricing'"],
-  "attendees": ["names of other people present besides the rep and Dr. {hcp.name}"],
+  "attendees": ["names of other people present besides the rep and {display_name(hcp.name)}"],
   "hcp_sentiment": "Positive | Neutral | Negative",
   "sentiment_score": float between -1.0 and 1.0
 }}
@@ -144,6 +155,7 @@ Notes:
             raw_notes=raw_text,
             ai_summary=data.get("summary"),
         )
+        await apply_compliance(db, interaction, hcp)
         db.add(interaction)
         await db.commit()
         await db.refresh(interaction)
@@ -156,6 +168,8 @@ Notes:
             "samples_dropped": interaction.samples_dropped,
             "materials_shared": interaction.materials_shared,
             "attendees": interaction.attendees,
+            "compliance_flag": interaction.compliance_flag,
+            "compliance_notes": interaction.compliance_notes,
             "hcp_sentiment": interaction.hcp_sentiment,
         })
 
@@ -216,12 +230,12 @@ Notes:
             interaction.sentiment_score = None  # type: ignore[assignment]  # column is nullable=True but annotated Mapped[float]
             changed["sentiment_score"] = None
 
-        if "samples_dropped" in changed:
+        if "samples_dropped" in changed or "materials_shared" in changed:
             hcp = await db.get(HCP, interaction.hcp_id)
             if hcp is None:  # FK makes this unreachable; fail without saving rather than guess
                 await db.rollback()
                 return json.dumps({"error": f"No HCP found with id {interaction.hcp_id}"})
-            apply_compliance(interaction, hcp)
+            await apply_compliance(db, interaction, hcp)
 
         history = list(interaction.edit_history or [])
         history.append({
@@ -241,7 +255,7 @@ Notes:
             "interaction_id": interaction.id,
             "changed_fields": list(changed.keys()),
         }
-        if "samples_dropped" in changed:
+        if "samples_dropped" in changed or "materials_shared" in changed:
             result["compliance_flag"] = interaction.compliance_flag
             result["compliance_notes"] = interaction.compliance_notes
         return json.dumps(result)
@@ -353,7 +367,7 @@ Notes:
         ) or "No prior interactions on file."
 
         prompt = f"""You are a pharmaceutical sales strategy assistant.
-HCP: Dr. {hcp.name}, {hcp.specialty or "specialty unknown"}, tier {hcp.tier}.
+HCP: {display_name(hcp.name)}, {hcp.specialty or "specialty unknown"}, tier {hcp.tier}.
 Recent interaction history:
 {history_text}
 

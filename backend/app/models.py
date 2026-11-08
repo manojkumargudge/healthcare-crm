@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, date, timezone
-from sqlalchemy import String, Text, Date, DateTime, ForeignKey, JSON, Float, Boolean, Index, func
+from sqlalchemy import String, Text, Date, DateTime, ForeignKey, JSON, Float, Boolean, Index, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -101,6 +101,9 @@ class Material(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Starter catalog and pre-existing tags are approved; anything a rep adds
+    # starts unapproved ("Pending approval") and is flagged by compliance.
+    approved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

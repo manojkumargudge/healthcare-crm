@@ -115,19 +115,6 @@ async def test_patch_replaces_attendees_with_audit(client: httpx.AsyncClient, hc
     assert body["edit_history"][0]["after"] == {"attendees": ["B", "C"]}
 
 
-async def test_legacy_rows_without_attendees_serialize_as_empty(
-    client: httpx.AsyncClient, hcp: dict, db: AsyncSession
-) -> None:
-    row = Interaction(hcp_id=hcp["id"])
-    db.add(row)
-    await db.commit()
-    async with test_engine.begin() as conn:
-        # Migrated databases (003) have a nullable column; mimic that here.
-        await conn.exec_driver_sql("ALTER TABLE interactions ALTER COLUMN attendees DROP NOT NULL")
-        await conn.exec_driver_sql("UPDATE interactions SET attendees = NULL WHERE id = $1", (row.id,))
-    assert (await client.get(f"/api/interactions/{row.id}")).json()["attendees"] == []
-
-
 async def test_hcp_search_for_attendee_picker(client: httpx.AsyncClient, make_hcp) -> None:
     await make_hcp(name="Dr. Anjali Rao", specialty="Cardiologist", institution="Manipal Hospital")
     await make_hcp(name="Dr. Vivek Sharma", specialty="Endocrinologist", institution="Apollo Clinic")

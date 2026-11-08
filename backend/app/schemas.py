@@ -85,11 +85,6 @@ class InteractionOut(BaseModel):
     updated_at: datetime
     edit_history: list
 
-    @field_validator("attendees", mode="before")
-    @classmethod
-    def _none_to_empty(cls, v: object) -> object:
-        return [] if v is None else v  # rows created before the attendees column existed
-
 
 class MaterialCreate(BaseModel):
     name: Name
@@ -99,6 +94,7 @@ class MaterialOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
+    approved: bool
 
 
 class FollowUpOut(BaseModel):

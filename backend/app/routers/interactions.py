@@ -43,7 +43,7 @@ async def create_interaction(payload: InteractionCreate, db: AsyncSession = Depe
 
     # Compliance is evaluated before anything is written, so the row and its
     # compliance result land in one commit; if the check raises, nothing is saved.
-    apply_compliance(interaction, hcp)
+    await apply_compliance(db, interaction, hcp)
 
     db.add(interaction)
     await db.commit()
