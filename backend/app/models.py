@@ -86,4 +86,5 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(20))  # user/assistant/tool
     content: Mapped[str] = mapped_column(Text)
     tool_name: Mapped[str] = mapped_column(String(50), nullable=True)
+    tool_call_id: Mapped[str] = mapped_column(String(100), nullable=True)  # set on role="tool" rows
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

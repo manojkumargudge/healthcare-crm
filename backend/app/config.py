@@ -1,32 +1,78 @@
-from pydantic import Field, ValidationError
+from pathlib import Path
+from typing import Optional
+
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The one .env file, at the repo root (shared with docker compose). Resolved
+# from this file's location so it works regardless of the working directory.
+# Inside the Docker image this path does not exist; compose passes env vars.
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    # Required, no defaults: credentials must come from the environment / .env.
-    database_url: str = Field(min_length=1)
+    # Unknown keys in .env fail startup (pydantic-settings default extra="forbid"),
+    # so a typo or a retired key is caught instead of silently ignored. Every key
+    # in .env.example must therefore be declared here, including compose-only ones.
+
     groq_api_key: str = Field(min_length=1)
+
+    # Either DATABASE_URL (compose, CI, tests) or the POSTGRES_* values below.
+    database_url: str = ""  # empty -> built from POSTGRES_* by the validator below
+    postgres_user: Optional[str] = None
+    postgres_password: Optional[str] = None
+    postgres_db: Optional[str] = None
+    postgres_host: str = "127.0.0.1"
+    postgres_port: int = 5432  # host port published by compose
 
     # Groq models (env: GROQ_MODEL, GROQ_MODEL_FAST). The assignment brief's
     # gemma2-9b-it and llama-3.3-70b-versatile are decommissioned on Groq.
     groq_model: str = Field(default="openai/gpt-oss-120b", min_length=1)  # agent loop, recommendations
     groq_model_fast: str = Field(default="openai/gpt-oss-20b", min_length=1)  # extraction / summarization
-    frontend_origin: str = "http://localhost:5173"
 
-    # extra="ignore": older .env files may still carry retired keys such as
-    # GROQ_FALLBACK_MODEL; they must not stop the app from starting.
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    frontend_origin: str = "http://localhost:5173"
+    backend_port: int = 8000  # compose-only (host port); declared so .env stays strict
+
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
+
+    @model_validator(mode="after")
+    def _build_database_url(self) -> "Settings":
+        if not self.database_url:
+            missing = [
+                name
+                for name, value in (
+                    ("POSTGRES_USER", self.postgres_user),
+                    ("POSTGRES_PASSWORD", self.postgres_password),
+                    ("POSTGRES_DB", self.postgres_db),
+                )
+                if not value
+            ]
+            if missing:
+                raise ValueError(f"DATABASE_URL is not set and neither are {', '.join(missing)}")
+            self.database_url = (
+                f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
+                f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+            )
+        return self
 
 
 def load_settings() -> Settings:
-    """Build Settings, failing fast with a readable message if required values are missing."""
+    """Build Settings, failing fast with a readable message if anything is missing or unknown."""
     try:
-        return Settings()
+        return Settings(_env_file=ENV_FILE)  # type: ignore[call-arg]  # pydantic-settings init kwarg, not a field
     except ValidationError as exc:
-        fields = sorted({str(err["loc"][0]).upper() for err in exc.errors()})
+        problems = []
+        for err in exc.errors():
+            loc = str(err["loc"][0]).upper() if err["loc"] else "DATABASE_URL"
+            if err["type"] == "extra_forbidden":
+                problems.append(f"{loc} (unknown key)")
+            elif err["type"] == "missing" or "at least 1 character" in err["msg"]:
+                problems.append(f"{loc} (missing)")
+            else:
+                problems.append(f"{loc} ({err['msg'].removeprefix('Value error, ')})")
         raise RuntimeError(
-            f"Missing or invalid required setting(s): {', '.join(fields)}. "
-            "Set them in the environment or in backend/.env (see backend/.env.example)."
+            f"Invalid configuration: {'; '.join(sorted(set(problems)))}. "
+            f"Settings come from the environment or {ENV_FILE} (see .env.example)."
         ) from exc
 
 

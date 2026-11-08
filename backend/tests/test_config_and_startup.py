@@ -14,43 +14,95 @@ from tests.conftest import test_engine
 
 
 # ------------------------------------------------------------- config -------
+SETTINGS_VARS = (
+    "DATABASE_URL", "GROQ_API_KEY", "GROQ_MODEL", "GROQ_MODEL_FAST", "FRONTEND_ORIGIN", "BACKEND_PORT",
+    "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT",
+)
+
+
 @pytest.fixture
-def no_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    for var in ("DATABASE_URL", "GROQ_API_KEY"):
+def env_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Isolate settings from the real environment and the developer's root .env.
+
+    Returns a writer: env_file("KEY=value", ...) creates the .env that load_settings reads.
+    """
+    for var in SETTINGS_VARS:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.chdir(tmp_path)  # no .env file here either
+    path = tmp_path / ".env"
+    monkeypatch.setattr(config, "ENV_FILE", path)
+
+    def write(*lines: str) -> Path:
+        path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+        return path
+
+    return write
 
 
-@pytest.mark.usefixtures("no_env")
-def test_settings_fail_fast_when_both_missing() -> None:
-    with pytest.raises(RuntimeError, match=r"DATABASE_URL, GROQ_API_KEY"):
+def test_env_file_is_the_repo_root_dotenv() -> None:
+    assert config.ENV_FILE == Path(config.__file__).resolve().parents[2] / ".env"
+
+
+def test_settings_fail_fast_when_nothing_is_set(env_file) -> None:
+    with pytest.raises(RuntimeError) as exc:
+        config.load_settings()  # no .env written at all
+    # Field errors are reported first; the database check runs once fields are valid.
+    assert "GROQ_API_KEY (missing)" in str(exc.value)
+
+
+def test_settings_missing_database_settings(env_file) -> None:
+    env_file("GROQ_API_KEY=k")
+    with pytest.raises(RuntimeError, match="neither are POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB"):
         config.load_settings()
 
 
-@pytest.mark.usefixtures("no_env")
-@pytest.mark.parametrize(("present", "missing"), [("DATABASE_URL", "GROQ_API_KEY"), ("GROQ_API_KEY", "DATABASE_URL")])
-def test_settings_fail_fast_when_one_missing(monkeypatch: pytest.MonkeyPatch, present: str, missing: str) -> None:
-    monkeypatch.setenv(present, "x")
-    with pytest.raises(RuntimeError, match=rf"setting\(s\): {missing}\."):
+def test_settings_missing_groq_key(env_file) -> None:
+    env_file("DATABASE_URL=postgresql+asyncpg://u:p@h:1/db")
+    with pytest.raises(RuntimeError, match=r"GROQ_API_KEY \(missing\)"):
         config.load_settings()
 
 
-@pytest.mark.usefixtures("no_env")
-def test_settings_reject_empty_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u@h/db")
-    monkeypatch.setenv("GROQ_API_KEY", "")
-    with pytest.raises(RuntimeError, match="GROQ_API_KEY"):
+def test_settings_reject_empty_groq_key(env_file) -> None:
+    env_file("DATABASE_URL=postgresql+asyncpg://u:p@h:1/db", "GROQ_API_KEY=")
+    with pytest.raises(RuntimeError, match=r"GROQ_API_KEY \(missing\)"):
         config.load_settings()
 
 
-@pytest.mark.usefixtures("no_env")
-def test_settings_have_no_credential_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u@h/db")
-    monkeypatch.setenv("GROQ_API_KEY", "k")
+def test_settings_partial_postgres_values_name_whats_missing(env_file) -> None:
+    env_file("GROQ_API_KEY=k", "POSTGRES_USER=u")
+    with pytest.raises(RuntimeError, match="neither are POSTGRES_PASSWORD, POSTGRES_DB"):
+        config.load_settings()
+
+
+def test_database_url_built_from_root_env_postgres_values(env_file) -> None:
+    env_file(
+        "POSTGRES_USER=hcp_user", "POSTGRES_PASSWORD=s3cret", "POSTGRES_DB=hcp_crm",
+        "POSTGRES_PORT=55432", "GROQ_API_KEY=k",
+    )
     s = config.load_settings()
-    assert (s.database_url, s.groq_api_key) == ("postgresql+asyncpg://u@h/db", "k")
-    assert config.Settings.model_fields["database_url"].is_required()
-    assert config.Settings.model_fields["groq_api_key"].is_required()
+    assert s.database_url == "postgresql+asyncpg://hcp_user:s3cret@127.0.0.1:55432/hcp_crm"
+
+
+def test_explicit_database_url_wins(env_file, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file("POSTGRES_USER=u", "POSTGRES_PASSWORD=p", "POSTGRES_DB=d", "GROQ_API_KEY=k")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://x:y@db:5432/other")
+    assert config.load_settings().database_url == "postgresql+asyncpg://x:y@db:5432/other"
+
+
+@pytest.mark.parametrize("key", ["GROQ_FALLBACK_MODEL", "POSTGRS_USER", "SOMETHING_ELSE"])
+def test_unknown_key_in_dotenv_fails_startup(env_file, key: str) -> None:
+    env_file("DATABASE_URL=postgresql+asyncpg://u:p@h:1/db", "GROQ_API_KEY=k", f"{key}=x")
+    with pytest.raises(RuntimeError, match=rf"{key} \(unknown key\)"):
+        config.load_settings()
+
+
+def test_every_env_example_key_is_accepted(env_file) -> None:
+    """The template must never trip the strict unknown-key check."""
+    example = Path(config.__file__).resolve().parents[2] / ".env.example"
+    lines = [ln.lstrip("# ").strip() for ln in example.read_text(encoding="utf-8").splitlines()]
+    keys = sorted({ln.split("=", 1)[0] for ln in lines if "=" in ln and ln.split("=", 1)[0].isupper()})
+    assert {"POSTGRES_USER", "GROQ_API_KEY", "POSTGRES_PORT", "GROQ_MODEL_FAST"} <= set(keys)
+    env_file(*(f"{k}={'k' if k == 'GROQ_API_KEY' else ('5432' if k.endswith('_PORT') else 'v')}" for k in keys))
+    config.load_settings()
 
 
 # ------------------------------------------------------------ lifespan ------
@@ -64,12 +116,17 @@ async def test_lifespan_inits_db_and_disposes_engine(monkeypatch: pytest.MonkeyP
         async def dispose(self) -> None:
             calls.append("dispose")
 
+    async def fake_close_groq() -> None:
+        calls.append("close_groq")
+
     monkeypatch.setattr(main_module, "init_db", fake_init_db)
     monkeypatch.setattr(main_module, "engine", FakeEngine())
+    monkeypatch.setattr(main_module, "init_groq_client", lambda: calls.append("init_groq"))
+    monkeypatch.setattr(main_module, "close_groq_client", fake_close_groq)
 
     async with main_module.app.router.lifespan_context(main_module.app):
-        assert calls == ["init_db"]
-    assert calls == ["init_db", "dispose"]
+        assert calls == ["init_db", "init_groq"]
+    assert calls == ["init_db", "init_groq", "close_groq", "dispose"]
 
 
 def test_no_on_event_handlers() -> None:
@@ -186,12 +243,8 @@ async def test_timestamptz_migration_preserves_naive_utc_values_exactly(_schema:
         await conn.exec_driver_sql("DROP SCHEMA legacy_vals CASCADE")
 
 
-@pytest.mark.usefixtures("no_env")
-def test_groq_model_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u@h/db")
-    monkeypatch.setenv("GROQ_API_KEY", "k")
-    for var in ("GROQ_MODEL", "GROQ_MODEL_FAST"):
-        monkeypatch.delenv(var, raising=False)
+def test_groq_model_defaults_and_overrides(env_file, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file("DATABASE_URL=postgresql+asyncpg://u:p@h:1/db", "GROQ_API_KEY=k")
     s = config.load_settings()
     assert (s.groq_model, s.groq_model_fast) == ("openai/gpt-oss-120b", "openai/gpt-oss-20b")
 
@@ -201,17 +254,56 @@ def test_groq_model_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> N
     assert (s.groq_model, s.groq_model_fast) == ("m-main", "m-fast")
 
 
-@pytest.mark.usefixtures("no_env")
-def test_retired_env_keys_in_dotenv_do_not_break_startup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text(
-        "\n".join(
-            [
-                "DATABASE_URL=postgresql+asyncpg://u@h/db",
-                "GROQ_API_KEY=k",
-                "GROQ_FALLBACK_MODEL=llama-3.3-70b-versatile",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    s = config.load_settings()  # cwd is tmp_path (no_env fixture)
-    assert s.groq_api_key == "k"
+MIGRATION_002 = Path(__file__).resolve().parents[1] / "migrations" / "002_chat_messages_dedupe.sql"
+
+
+async def test_chat_dedupe_migration(_schema: None) -> None:
+    sql = MIGRATION_002.read_text(encoding="utf-8")
+    async with test_engine.connect() as conn:
+        await conn.exec_driver_sql("DROP SCHEMA IF EXISTS legacy_chat CASCADE")
+        await conn.exec_driver_sql("CREATE SCHEMA legacy_chat")
+        await conn.exec_driver_sql("SET search_path TO legacy_chat")
+        # Pre-002 shape: no tool_call_id column.
+        await conn.exec_driver_sql(
+            "CREATE TABLE chat_messages (id varchar(36) primary key, session_id varchar(36), role varchar(20), "
+            "content text, tool_name varchar(50), created_at timestamptz)"
+        )
+        rows = [
+            # session A: one real log_interaction tool row, re-saved on 2 later turns
+            ("t1", "A", "tool", '{"logged":1}', "log_interaction", "2026-01-01 10:00:01+00:00"),
+            ("t1b", "A", "tool", '{"logged":1}', "log_interaction", "2026-01-01 10:01:01+00:00"),
+            ("t1c", "A", "tool", '{"logged":1}', "log_interaction", "2026-01-01 10:02:01+00:00"),
+            ("t2", "A", "tool", '{"ctx":1}', "get_hcp_context", "2026-01-01 10:01:00+00:00"),
+            # genuinely repeated user/assistant messages: must be kept
+            ("u1", "A", "user", "ok", None, "2026-01-01 10:00:00+00:00"),
+            ("u2", "A", "user", "ok", None, "2026-01-01 10:01:00+00:00"),
+            ("a1", "A", "assistant", "Done.", None, "2026-01-01 10:00:02+00:00"),
+            ("a2", "A", "assistant", "Done.", None, "2026-01-01 10:01:02+00:00"),
+            # same tool content in another session: not a duplicate
+            ("t3", "B", "tool", '{"logged":1}', "log_interaction", "2026-01-01 11:00:00+00:00"),
+        ]
+        for r in rows:
+            await conn.exec_driver_sql(
+                "INSERT INTO chat_messages VALUES ($1, $2, $3, $4, $5, $6)", (*r[:5], datetime.fromisoformat(r[5]))
+            )
+        await conn.commit()
+
+        # Multi-statement file (own BEGIN/COMMIT): run it like psql does, via the
+        # simple-query protocol on the raw asyncpg connection.
+        raw = (await conn.get_raw_connection()).driver_connection
+        assert raw is not None
+        await raw.execute(sql)
+        await raw.execute(sql)  # idempotent
+
+        kept = sorted(r[0] for r in (await conn.exec_driver_sql("SELECT id FROM chat_messages")).all())
+        assert kept == ["a1", "a2", "t1", "t2", "t3", "u1", "u2"]  # earliest copy of t1 kept
+        col = (
+            await conn.exec_driver_sql(
+                "SELECT data_type FROM information_schema.columns WHERE table_schema = 'legacy_chat' "
+                "AND table_name = 'chat_messages' AND column_name = 'tool_call_id'"
+            )
+        ).scalar_one()
+        assert col == "character varying"
+        await conn.exec_driver_sql("SET search_path TO public")
+        await conn.exec_driver_sql("DROP SCHEMA legacy_chat CASCADE")
+        await conn.commit()

@@ -15,7 +15,9 @@ configured model. Any other error (auth, rate limit, network) is raised
 immediately rather than silently retried.
 """
 import logging
+from typing import Optional
 
+import groq
 from langchain_groq import ChatGroq
 
 from app.config import settings
@@ -41,6 +43,40 @@ def _dedupe(seq):
     return out
 
 
+# One shared Groq SDK client pair for the whole process (connection pooling).
+# Created in the FastAPI lifespan and closed on shutdown; created lazily for
+# non-server callers (seed script, tests) that never run the lifespan.
+_clients: Optional[tuple[groq.Groq, groq.AsyncGroq]] = None
+
+
+def init_groq_client() -> None:
+    global _clients
+    if _clients is None:
+        _clients = (groq.Groq(api_key=settings.groq_api_key), groq.AsyncGroq(api_key=settings.groq_api_key))
+
+
+async def close_groq_client() -> None:
+    global _clients
+    if _clients is not None:
+        sync_client, async_client = _clients
+        _clients = None
+        await async_client.close()
+        sync_client.close()
+
+
+def _chat(model: str, temperature: float) -> ChatGroq:
+    init_groq_client()
+    assert _clients is not None
+    sync_client, async_client = _clients
+    return ChatGroq(
+        api_key=settings.groq_api_key,  # type: ignore[arg-type]  # ChatGroq coerces str to SecretStr
+        model=model,
+        temperature=temperature,
+        client=sync_client.chat.completions,
+        async_client=async_client.chat.completions,
+    )
+
+
 def model_chain(fast: bool = False) -> list[str]:
     """Models to try, in order. Read at call time so settings changes apply."""
     main, quick = settings.groq_model, settings.groq_model_fast
@@ -50,12 +86,12 @@ def model_chain(fast: bool = False) -> list[str]:
 def get_llm(temperature: float = 0.2) -> ChatGroq:
     """Main model (GROQ_MODEL). Prefer `ainvoke_resilient`, which survives a
     Groq-side model retirement."""
-    return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_model, temperature=temperature)
+    return _chat(settings.groq_model, temperature)
 
 
 def get_fast_llm(temperature: float = 0.2) -> ChatGroq:
     """Fast model (GROQ_MODEL_FAST) for extraction/summarization."""
-    return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_model_fast, temperature=temperature)
+    return _chat(settings.groq_model_fast, temperature)
 
 
 async def ainvoke_resilient(messages, temperature: float = 0.2, tools=None, fast: bool = False):
@@ -67,8 +103,9 @@ async def ainvoke_resilient(messages, temperature: float = 0.2, tools=None, fast
     Returns (response, model_name_actually_used).
     """
     last_err = None
-    for model_name in model_chain(fast):
-        llm = ChatGroq(api_key=settings.groq_api_key, model=model_name, temperature=temperature)
+    chain = model_chain(fast)
+    for i, model_name in enumerate(chain):
+        llm = _chat(model_name, temperature)
         if tools:
             llm = llm.bind_tools(tools)  # type: ignore[assignment]  # bind_tools returns a Runnable, not ChatGroq; only .ainvoke is used after
         try:
@@ -77,7 +114,13 @@ async def ainvoke_resilient(messages, temperature: float = 0.2, tools=None, fast
         except Exception as e:
             msg = str(e).lower()
             if any(hint in msg for hint in _DECOMMISSION_HINTS):
-                logger.warning("Groq model '%s' unavailable (%s) — trying the other configured model.", model_name, e)
+                next_model = chain[i + 1] if i + 1 < len(chain) else None
+                logger.warning(
+                    "Groq model fallback: %s -> %s (reason: %s)",
+                    model_name,
+                    next_model or "none left",
+                    str(e)[:300],
+                )
                 last_err = e
                 continue
             raise

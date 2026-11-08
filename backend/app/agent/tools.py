@@ -164,6 +164,18 @@ Notes:
                 setattr(interaction, field, value)
                 changed[field] = value
 
+        # sentiment_score was produced by the LLM for the *old* label; once the
+        # label changes it no longer describes anything, so clear it (and keep
+        # the old value in the audit entry) rather than leave a contradiction.
+        if (
+            "hcp_sentiment" in changed
+            and before["hcp_sentiment"] != changed["hcp_sentiment"]
+            and interaction.sentiment_score is not None
+        ):
+            before["sentiment_score"] = interaction.sentiment_score
+            interaction.sentiment_score = None  # type: ignore[assignment]  # column is nullable=True but annotated Mapped[float]
+            changed["sentiment_score"] = None
+
         if "samples_dropped" in changed:
             hcp = await db.get(HCP, interaction.hcp_id)
             if hcp is None:  # FK makes this unreachable; fail without saving rather than guess

@@ -242,3 +242,40 @@ async def test_patch_without_samples_leaves_compliance_alone(client: httpx.Async
     body = (await client.patch(f"/api/interactions/{created['id']}", json={"raw_notes": "x"})).json()
     assert body["compliance_flag"] is True
     assert body["compliance_notes"] == created["compliance_notes"]
+
+
+# ------------------------------------------- sentiment label vs score -------
+async def _with_score(db, hcp_id: str, label: str | None, score: float | None) -> str:
+    from app.models import Interaction
+
+    row = Interaction(hcp_id=hcp_id, hcp_sentiment=label, sentiment_score=score)
+    db.add(row)
+    await db.commit()
+    return row.id
+
+
+async def test_patch_sentiment_change_nulls_score(client: httpx.AsyncClient, hcp: dict, db) -> None:
+    iid = await _with_score(db, hcp["id"], "Positive", 0.8)
+    body = (await client.patch(f"/api/interactions/{iid}", json={"hcp_sentiment": "Negative"})).json()
+    assert (body["hcp_sentiment"], body["sentiment_score"]) == ("Negative", None)
+    assert body["edit_history"][0]["before"] == {"hcp_sentiment": "Positive", "sentiment_score": 0.8}
+
+
+async def test_patch_same_sentiment_keeps_score(client: httpx.AsyncClient, hcp: dict, db) -> None:
+    iid = await _with_score(db, hcp["id"], "Positive", 0.8)
+    body = (await client.patch(f"/api/interactions/{iid}", json={"hcp_sentiment": "Positive"})).json()
+    assert body["sentiment_score"] == 0.8
+    assert "sentiment_score" not in body["edit_history"][0]["after"]
+
+
+async def test_patch_other_fields_keep_score(client: httpx.AsyncClient, hcp: dict, db) -> None:
+    iid = await _with_score(db, hcp["id"], "Positive", 0.8)
+    body = (await client.patch(f"/api/interactions/{iid}", json={"raw_notes": "x"})).json()
+    assert body["sentiment_score"] == 0.8
+
+
+async def test_patch_sentiment_without_score_records_no_score(client: httpx.AsyncClient, hcp: dict) -> None:
+    created = (await client.post("/api/interactions", json={"hcp_id": hcp["id"]})).json()
+    body = (await client.patch(f"/api/interactions/{created['id']}", json={"hcp_sentiment": "Neutral"})).json()
+    assert body["sentiment_score"] is None
+    assert body["edit_history"][0]["after"] == {"hcp_sentiment": "Neutral"}

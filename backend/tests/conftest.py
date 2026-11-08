@@ -36,7 +36,7 @@ if not _test_db_name.endswith("_test"):
         returncode=4,
     )
 
-# Env vars take precedence over backend/.env in pydantic-settings, so a
+# Env vars take precedence over the root .env in pydantic-settings, so a
 # developer's real key in .env is never picked up by the test run.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["GROQ_API_KEY"] = "test-key-not-a-real-groq-key"

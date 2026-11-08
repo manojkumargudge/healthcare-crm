@@ -94,18 +94,19 @@ curl http://127.0.0.1:8000/health      # {"status":"healthy"}
 
 Needs Python 3.11 and a PostgreSQL 16 server you can reach. That can be a local install, or the Compose Postgres from the Quickstart (`docker compose up -d postgres`). If the Compose backend is also running, stop it first (`docker compose stop backend`), because it already uses port 8000.
 
+There is only one `.env` file: the root one from the Quickstart. The backend reads it directly, whatever directory you start it from.
+
 ```bash
 cd backend
 python -m venv venv
 source venv/bin/activate        # Windows Git Bash: source venv/Scripts/activate; cmd: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env
-# edit .env: DATABASE_URL (user, password, port, database) and GROQ_API_KEY
 python -m app.seed              # optional: 3 demo HCPs
 uvicorn app.main:app --reload --port 8000
 ```
 
-- With the Compose Postgres, `DATABASE_URL` uses the root `.env` values, e.g. `postgresql+asyncpg://hcp_user:<POSTGRES_PASSWORD>@127.0.0.1:55432/hcp_crm` if you set `POSTGRES_PORT=55432`.
+- **Database connection:** the backend builds its URL from `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` and `POSTGRES_PORT` in the root `.env`, connecting to `127.0.0.1`. To use another server, set `POSTGRES_HOST`, or set `DATABASE_URL` in `.env` or the environment, which takes precedence.
+- **Strict settings:** an unknown key in `.env` stops the backend at startup with an error naming the key. This catches typos and retired settings such as `GROQ_FALLBACK_MODEL`.
 - Use `127.0.0.1`, not `localhost`. On Windows `localhost` tries IPv6 first, and every connection stalls for about 2 seconds.
 
 ### Frontend
@@ -181,8 +182,7 @@ Replace `hcp_user` and `hcp_crm` with your `POSTGRES_USER` and `POSTGRES_DB`.
 ## Security notes
 
 - **Secrets live only in `.env` files, which git ignores.**
-  - Compose reads the root `.env`, and the backend container gets its settings from there.
-  - `backend/.env` is only for running the backend without Docker.
+  - There is a single `.env` at the repo root. Compose reads it for the containers, and the backend reads it directly when run without Docker.
   - Neither `docker-compose.yml` nor `app/config.py` contains credentials, and `backend/.dockerignore` keeps `.env` out of the image.
 - **Ports are bound to `127.0.0.1`.** Postgres and the backend are published only on the loopback interface, so other machines on your network can't reach them.
 - **The backend container runs as a non-root user.**

@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 import pytest
 from langchain_groq import ChatGroq
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import llm as llm_module
@@ -27,7 +27,7 @@ pytestmark = pytest.mark.live
 
 
 @pytest.fixture(autouse=True)
-def _real_groq(monkeypatch: pytest.MonkeyPatch) -> None:
+async def _real_groq(monkeypatch: pytest.MonkeyPatch):
     key = os.environ.get("LIVE_GROQ_API_KEY", "")
     if not key:
         pytest.fail("LIVE_GROQ_API_KEY is not set")
@@ -42,14 +42,17 @@ def _real_groq(monkeypatch: pytest.MonkeyPatch) -> None:
         "groq_model_fast",
         os.environ.get("LIVE_GROQ_MODEL_FAST", Settings.model_fields["groq_model_fast"].default),
     )
+    # The shared client captures the API key; rebuild it on this test's event loop.
+    await llm_module.close_groq_client()
+    yield
+    await llm_module.close_groq_client()
 
 
 class _Chat:
-    """Drives /api/chat/turn and returns only the tools called in *this* turn."""
+    """Drives /api/chat/turn; the response lists only the tools called in that turn."""
 
     def __init__(self, client: httpx.AsyncClient, hcp_id: str, session_id: str) -> None:
         self.client, self.hcp_id, self.session_id = client, hcp_id, session_id
-        self._seen = 0
 
     async def turn(self, message: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         resp = await self.client.post(
@@ -59,10 +62,7 @@ class _Chat:
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
-        # The endpoint reports tool calls for the whole session; slice off earlier turns.
-        new_calls = body["tool_calls"][self._seen :]
-        self._seen = len(body["tool_calls"])
-        return body, new_calls
+        return body, body["tool_calls"]
 
 
 def _names(calls: list[dict[str, Any]]) -> list[str]:
@@ -119,8 +119,11 @@ async def test_live_agent_runs_every_tool(client: httpx.AsyncClient, make_hcp, d
     assert "suggest_next_best_action" in _names(calls), calls
     assert body["reply"]
 
-    msgs = (await db.execute(select(func.count()).select_from(ChatMessage))).scalar_one()
-    assert msgs >= 12  # at least a user + assistant row per turn
+    rows = (await db.execute(select(ChatMessage))).scalars().all()
+    assert sum(r.role == "user" for r in rows) == 6 and sum(r.role == "assistant" for r in rows) == 6
+    tool_rows = [r for r in rows if r.role == "tool"]
+    assert sum(r.tool_name == "log_interaction" for r in tool_rows) == 1  # stored once, not once per turn
+    assert len({r.tool_call_id for r in tool_rows}) == len(tool_rows)  # no duplicate tool rows
 
 
 @pytest.mark.parametrize("model", ["gemma2-9b-it", "llama-3.3-70b-versatile"])
