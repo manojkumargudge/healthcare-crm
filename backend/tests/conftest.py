@@ -40,6 +40,9 @@ if not _test_db_name.endswith("_test"):
 # developer's real key in .env is never picked up by the test run.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["GROQ_API_KEY"] = "test-key-not-a-real-groq-key"
+os.environ["JWT_SECRET"] = "test-only-jwt-secret-0123456789-abcdefghijklmnop"
+for _var in ("ADMIN_EMAIL", "ADMIN_PASSWORD"):  # tests create their own users
+    os.environ.pop(_var, None)
 
 import httpx  # noqa: E402
 from langchain_core.messages import AIMessage  # noqa: E402
@@ -56,6 +59,32 @@ from app.models import Product, gen_uuid, utcnow  # noqa: E402
 from sqlalchemy.dialects.postgresql import insert as pg_insert  # noqa: E402
 
 TEST_PRODUCTS = (*SEED_PRODUCTS, "A", "B", "C", "X", "DrugX", "Good", "ok")
+
+from app.authz import Authz, Principal  # noqa: E402
+from app.models import User  # noqa: E402
+from app.ratelimit import llm_limiter  # noqa: E402
+from app.security import create_access_token, hash_password  # noqa: E402
+
+# Fixed test users (recreated for every test). Hashes are computed once: argon2 is slow on purpose.
+TEST_PASSWORD = "correct horse battery staple"
+_HASH = hash_password(TEST_PASSWORD)
+USERS = {
+    "admin": Principal(id="00000000-0000-0000-0000-00000000000a", email="admin@test.example", role="admin"),
+    "manager": Principal(id="00000000-0000-0000-0000-00000000000b", email="manager@test.example", role="manager"),
+    "rep_a": Principal(id="00000000-0000-0000-0000-00000000000c", email="rep.a@test.example", role="rep"),
+    "rep_b": Principal(id="00000000-0000-0000-0000-00000000000d", email="rep.b@test.example", role="rep"),
+}
+ADMIN_ID = USERS["admin"].id
+ADMIN_AUTHZ = Authz(USERS["admin"])
+
+
+def authz_for(name: str) -> Authz:
+    return Authz(USERS[name])
+
+
+def auth_header(name: str) -> dict[str, str]:
+    token, _ = create_access_token(USERS[name].id, USERS[name].role)
+    return {"Authorization": f"Bearer {token}"}
 
 # NullPool: every session opens a fresh connection on the current event loop,
 # so pytest-asyncio's per-test loops never share an asyncpg connection.
@@ -166,8 +195,18 @@ async def db(_schema: None) -> AsyncIterator[AsyncSession]:
         await session.execute(
             pg_insert(Product).values([{"id": gen_uuid(), "name": n, "created_at": utcnow()} for n in TEST_PRODUCTS])
         )
+        session.add_all(
+            User(id=p.id, email=p.email, password_hash=_HASH, role=p.role, is_active=True) for p in USERS.values()
+        )
         await session.commit()
         yield session
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits() -> Iterator[None]:
+    llm_limiter.reset()
+    yield
+    llm_limiter.reset()
 
 
 @pytest.fixture
@@ -180,9 +219,26 @@ async def client(db: AsyncSession) -> AsyncIterator[httpx.AsyncClient]:
     # ASGITransport does not run startup events, so init_db() (which uses the
     # import-time engine) is skipped; `_schema` already created the tables.
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    # The default client is signed in as the admin (full access); use client_as(...) for other roles.
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=auth_header("admin")) as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def client_as(client: httpx.AsyncClient):
+    """client_as("rep_a"|"rep_b"|"manager"|"admin"|None) -> client with that user's token (None = anonymous)."""
+    opened: list[httpx.AsyncClient] = []
+
+    async def make(name: str | None) -> httpx.AsyncClient:
+        headers = auth_header(name) if name else {}
+        c = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test", headers=headers)
+        opened.append(c)
+        return c
+
+    yield make
+    for c in opened:
+        await c.aclose()
 
 
 @pytest.fixture

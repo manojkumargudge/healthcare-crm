@@ -3,6 +3,8 @@
     python -m app.admin list-products
     python -m app.admin add-product "NeuroCalm"      # idempotent, case-insensitive
     python -m app.admin seed-products                # insert the starter list
+    python -m app.admin create-user EMAIL ROLE       # rep|manager|admin; password read from ADMIN_CLI_PASSWORD
+    python -m app.admin list-users
 
 Inside Docker: docker compose exec backend python -m app.admin add-product "NeuroCalm"
 """
@@ -43,6 +45,31 @@ async def list_products() -> list[str]:
         return list((await db.execute(select(Product.name).order_by(func.lower(Product.name)))).scalars().all())
 
 
+async def create_user(email: str, role: str, password: str) -> str:
+    from app.security import hash_password
+    from app.models import User
+
+    if role not in ("rep", "manager", "admin"):
+        raise SystemExit("role must be rep, manager or admin")
+    if len(password) < 12:
+        raise SystemExit("password must be at least 12 characters")
+    async with AsyncSessionLocal() as db:
+        if (await db.execute(select(User.id).where(func.lower(User.email) == email.lower()))).first():
+            raise SystemExit(f"user {email} already exists")
+        user = User(email=email, password_hash=hash_password(password), role=role)
+        db.add(user)
+        await db.commit()
+        return user.id
+
+
+async def list_users() -> list[str]:
+    from app.models import User
+
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(select(User).order_by(func.lower(User.email)))).scalars().all()
+        return [f"{u.email}\t{u.role}\t{'active' if u.is_active else 'inactive'}" for u in rows]
+
+
 async def _main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else ""
     if cmd == "add-product" and len(argv) == 3:
@@ -50,6 +77,13 @@ async def _main(argv: list[str]) -> int:
         print(f"{'added' if created else 'already in catalog'}: {name}")
     elif cmd == "list-products":
         print("\n".join(await list_products()))
+    elif cmd == "create-user" and len(argv) == 4:
+        import os
+
+        password = os.environ.get("ADMIN_CLI_PASSWORD", "")
+        print(f"created {argv[2]} ({argv[3]}): {await create_user(argv[2], argv[3], password)}")
+    elif cmd == "list-users":
+        print("\n".join(await list_users()))
     elif cmd == "seed-products":
         async with AsyncSessionLocal() as db:
             print(f"inserted {await seed_products(db)} starter products")

@@ -9,7 +9,11 @@ A CRM module for pharmaceutical field representatives to log interactions with H
 
 Both paths write to the same tables and apply the same sample validation and compliance rules (`backend/app/samples.py`). Edits keep a before/after history on the record.
 
-This is a working prototype. There is no authentication; see [Security notes](#security-notes).
+This is a working prototype for a single company. Terms used throughout the UI, API and these docs:
+- **Rep:** an app user, with role `rep`, `manager` or `admin`.
+- **HCP:** a doctor.
+
+Reps sign in, and every interaction, chat message and follow-up belongs to the rep who created it. See [Sign-in and access](#sign-in-and-access).
 
 The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](docs/brief-mockup.png)); see [`docs/screenshots/form-vs-mockup.png`](docs/screenshots/form-vs-mockup.png) for a side-by-side. The mockup's "Summarize from Voice Note (Requires Consent)" button is built: see [Voice notes](#voice-notes) and [`docs/screenshots/voice-3-summary-in-topics.png`](docs/screenshots/voice-3-summary-in-topics.png).
 
@@ -74,7 +78,15 @@ The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](d
 | GET | `/api/chat/{session_id}/history` | Stored messages for a chat session |
 | GET | `/api/products?q=` | Search the product catalog (Products Discussed and sample products). Read-only: see [Product catalog](#product-catalog) |
 | POST | `/api/voice-notes/summarize?consent=true` | Raw audio body (webm/ogg/wav/mp3/m4a/flac, max 10 MB) → transcript + "Topics Discussed" summary. Nothing is stored |
-| GET | `/health` | Liveness check |
+| GET | `/health` | Liveness check (no sign-in) |
+| POST | `/auth/login` | OAuth2 password form (`username` = email, `password`) → short-lived bearer token |
+| GET | `/auth/me` | The signed-in rep |
+| GET | `/api/admin/materials/pending` | Admin: materials waiting for approval |
+| POST | `/api/admin/materials/{id}/approve` | Admin: approve a material and re-run compliance on every interaction that used it |
+| POST / PATCH / DELETE | `/api/admin/products[/{id}]` | Admin: add, rename, remove catalog products |
+| GET / POST / PATCH | `/api/admin/reps[/{id}]` | Admin: list, add, change role / (de)activate / reset password |
+
+Every endpoint except `/health` and `/auth/login` needs `Authorization: Bearer <token>`.
 
 Interactive API docs: `http://127.0.0.1:8000/docs`.
 
@@ -86,13 +98,14 @@ Needs Docker with Compose v2 and a Groq API key ([console.groq.com/keys](https:/
 git clone https://github.com/manojkumargudge/healthcare-crm.git
 cd healthcare-crm
 cp .env.example .env
-# edit .env: set POSTGRES_PASSWORD and GROQ_API_KEY (GROQ_MODEL / GROQ_MODEL_FAST have working defaults)
+# edit .env: set POSTGRES_PASSWORD, GROQ_API_KEY, JWT_SECRET, ADMIN_EMAIL and ADMIN_PASSWORD
 docker compose up -d --build --wait
 curl http://127.0.0.1:8000/health      # {"status":"healthy"}
 ```
 
 - **Port clash:** if another Postgres already uses port 5432 on your machine (common on Windows), `docker compose up` fails with "ports are not available". Set `POSTGRES_PORT=55432` (or any free port) in `.env` and run it again. This only changes the host port; the backend container always reaches Postgres on 5432.
-- **Required values:** Compose refuses to start if `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` or `GROQ_API_KEY` is missing from `.env`.
+- **Required values:** Compose refuses to start if `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `GROQ_API_KEY` or `JWT_SECRET` is missing from `.env`.
+- **First sign-in:** the backend creates the seed admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` on startup. Sign in with those, then add reps under **Admin → Reps**.
 - **Startup order:** `--wait` returns once both services report healthy. Postgres is checked with `pg_isready`, the backend with `/health`, and the backend only starts after Postgres is healthy.
 - **Demo data:** to add 3 demo HCPs, run `docker compose exec backend python -m app.seed`. Each run adds another 3.
 - **Frontend:** Compose runs only Postgres and the backend. Start the frontend as in [Frontend](#frontend).
@@ -171,9 +184,33 @@ RUN_LIVE_GROQ=1 LIVE_GROQ_API_KEY=<your key> pytest -m live -v   # same TEST_DAT
 - **Backend:** ruff, mypy, and pytest against a Postgres 16 service.
 - **Frontend:** `npm ci`, `npm run build`, and Vitest.
 
+## Sign-in and access
+
+- **Accounts:** every app user is a rep with a role. Accounts are created by an admin (Admin screen or `/api/admin/reps`) or with the CLI:
+
+  ```bash
+  docker compose exec -e ADMIN_CLI_PASSWORD='a-long-password' backend python -m app.admin create-user rep.one@example.com rep
+  ```
+
+- **Tokens:** `/auth/login` checks the argon2 password hash and returns a JWT signed with `JWT_SECRET`. There is no default secret. Tokens last `ACCESS_TOKEN_MINUTES` (default 15).
+  - The frontend keeps the token in memory only. Reloading the page or getting any 401 returns the rep to the sign-in page.
+  - Each request re-reads the rep from the database, so deactivating a rep or changing their role applies immediately.
+- **Who can see and change what** (one rule set, `app/authz.py`, used by every route, every agent tool, chat sessions and voice notes):
+
+  | Role | Interactions, chat sessions, follow-ups | Admin screens |
+  |---|---|---|
+  | rep | own only (others' return 404) | no |
+  | manager | read everyone's; change only their own (403 otherwise) | no |
+  | admin | read and change everything | yes |
+
+  - HCPs (doctors), the material catalog and the product catalog are shared company data that every signed-in rep can read.
+  - The agent's tools act as the signed-in rep. For example, a rep's chat can't read or edit another rep's interactions, and a chat session can't be continued by anyone else.
+- **AI rate limit:** each rep has a budget of `RATE_LIMIT_LLM_PER_MINUTE` (default 20) requests per minute, shared across chat, follow-up suggestions and voice notes. Beyond that, requests get 429 with `Retry-After`. The limit is kept in memory per backend process.
+- **Admin screen:** approve pending materials (this re-runs compliance and clears stale "pending approval" flags), manage products, and manage reps. The last active admin can't be demoted or deactivated.
+
 ## Product catalog
 
-Products Discussed and sample products come from one **admin-only** catalog. There is no API to add products; an admin manages it:
+Products Discussed and sample products come from one **admin-only** catalog, managed on the Admin screen, through `/api/admin/products`, or with the CLI:
 
 ```bash
 docker compose exec backend python -m app.admin list-products
@@ -181,7 +218,11 @@ docker compose exec backend python -m app.admin add-product "NeuroCalm"   # idem
 ```
 
 - **Form:** must pick from the catalog. Unknown products, including sample products, are rejected with 422, "Pick from the product list". Case differences are accepted and stored in the catalog spelling.
-- **Chat:** product names the agent extracts are mapped to the closest catalog product. The match ignores case, spacing and punctuation and tolerates small typos ("cardiomx" becomes CardioMax). Names with no close match are stored in the interaction's `unmatched_products` and shown in the history. They are never added to the catalog.
+- **Chat:** product names the agent extracts are mapped to the closest catalog product. The match ignores case, spacing and punctuation and tolerates small typos.
+  - The rep's original text is kept in `product_matches` and shown in the history as "CardioMax (from 'cardiomx')".
+  - Products discussed with no close match are stored in `unmatched_products`.
+  - A **sample** whose product can't be matched is never saved. The agent saves nothing, asks the rep to pick from the closest catalog products, and then logs the interaction.
+  - Chat never adds to the catalog.
 
 ## Voice notes
 
@@ -212,6 +253,7 @@ There is no Alembic yet. Schema changes are hand-written, idempotent SQL files i
 | `005_interaction_time_outcomes.sql` | Adds `interaction_time`, `outcomes` and `follow_up_actions` to interactions (fields from the brief's form). |
 | `006_products_voice_consent.sql` | Adds the `products` catalog (backfilled from existing products and sample names) and `voice_note_consent` / `voice_note_consent_at` on interactions. |
 | `007_unmatched_products.sql` | Adds `interactions.unmatched_products`: product names from chat that match no catalog product. |
+| `008_users_ownership.sql` | Adds `users` and `owner_id` on interactions, chat messages and follow-ups, plus `product_matches`. Existing rows are assigned to the seed admin, so run it with the runner and with `ADMIN_EMAIL` / `ADMIN_PASSWORD` set. It stops with an error rather than leave rows without an owner. |
 
 Every file is safe to run more than once. Back up first, then apply all of them:
 
@@ -232,11 +274,15 @@ To add a migration, create the next numbered file, make it idempotent, update `a
   - Neither `docker-compose.yml` nor `app/config.py` contains credentials, and `backend/.dockerignore` keeps `.env` out of the image.
 - **Ports are bound to `127.0.0.1`.** Postgres and the backend are published only on the loopback interface, so other machines on your network can't reach them.
 - **The backend container runs as a non-root user.**
-- **No authentication yet:** every API endpoint is open to anyone who can reach it. Don't expose it beyond localhost.
+- **Sign-in required:**
+  - Passwords are hashed with argon2.
+  - Tokens are short-lived JWTs signed with `JWT_SECRET`, which has no default.
+  - Access follows the role rules in [Sign-in and access](#sign-in-and-access).
+  - Tokens can't be revoked before they expire, other than by deactivating the rep or rotating `JWT_SECRET`.
 - **Not done yet:**
   - The agent writes to the database without asking for confirmation.
   - Edit history is a JSON column on the record, not an append-only audit table.
-  - There is no rate limiting.
+  - Rate limiting covers only the AI endpoints, and is in memory (one backend process).
 - **Data:** this system stores data about doctors (HCPs), not patients.
 
 ## Project layout

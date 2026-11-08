@@ -87,6 +87,7 @@ Suggest up to {MAX_SUGGESTIONS} concrete follow-up actions for the rep. Return O
     rows = [
         FollowUp(
             hcp_id=interaction.hcp_id,
+            owner_id=interaction.owner_id,
             interaction_id=interaction.id,
             due_date=today + timedelta(days=s.days_from_now),
             reason=s.reason.strip(),

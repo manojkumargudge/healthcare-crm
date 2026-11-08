@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     groq_transcribe_model: str = Field(default="whisper-large-v3-turbo", min_length=1)
 
     frontend_origin: str = "http://localhost:5173"
+
+    # Auth. JWT_SECRET is required (no default); generate one with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+    jwt_secret: str = Field(min_length=32)
+    access_token_minutes: int = Field(default=15, ge=1, le=240)  # short-lived access tokens
+    # Seed admin: created at startup (and by migration 008) if both are set.
+    admin_email: Optional[str] = None
+    admin_password: Optional[str] = Field(default=None, min_length=12)
+
+    # Per-rep budget for the LLM endpoints (chat, follow-up suggestions, voice notes).
+    rate_limit_llm_per_minute: int = Field(default=20, ge=1)
     backend_port: int = 8000  # compose-only (host port); declared so .env stays strict
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")

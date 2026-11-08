@@ -156,45 +156,73 @@ async def require_catalog_products(db: AsyncSession, names: Optional[Iterable[An
     return clean_names(catalog[n.lower()] for n in cleaned)
 
 
-async def match_products(db: AsyncSession, names: Optional[Iterable[Any]]) -> tuple[list[str], list[str]]:
-    """Chat path: map names to the closest catalog product. Returns (matched, unmatched).
-    Never adds to the catalog."""
+def product_choices(name: str, catalog: Iterable[str], n: int = 3) -> list[str]:
+    """Closest catalog products to offer the rep when a name can't be matched."""
+    by_key = {_product_key(c): c for c in catalog}
+    keys = difflib.get_close_matches(_product_key(name), list(by_key), n=n, cutoff=0.0)
+    return [by_key[k] for k in keys]
+
+
+def _changed(original: str, canonical: str) -> bool:
+    """A fuzzy match worth showing ("cardiomx" -> CardioMax); case-only differences aren't."""
+    return " ".join(original.split()).lower() != canonical.lower()
+
+
+async def match_products(
+    db: AsyncSession, names: Optional[Iterable[Any]]
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Chat path: map names to the closest catalog product. Never adds to the catalog.
+
+    Returns (matched catalog names, unmatched names, fuzzy matches as
+    [{"product": catalog name, "from": the rep's original text}]).
+    """
     cleaned = clean_names(names)
     if not cleaned:
-        return [], []
+        return [], [], []
     catalog = await catalog_products(db)
     matched: list[str] = []
     unmatched: list[str] = []
+    fuzzy: list[dict[str, str]] = []
     for n in cleaned:
         hit = closest_product(n, catalog)
-        (matched if hit else unmatched).append(hit or n)
-    return clean_names(matched), clean_names(unmatched)
+        if hit is None:
+            unmatched.append(n)
+            continue
+        matched.append(hit)
+        if _changed(n, hit):
+            fuzzy.append({"product": hit, "from": n})
+    return clean_names(matched), clean_names(unmatched), fuzzy
 
 
 async def catalog_samples(
     db: AsyncSession, samples: list[dict[str, Any]], *, strict: bool
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """Sample product names in catalog spelling.
+) -> tuple[list[dict[str, Any]], list[str], list[dict[str, str]]]:
+    """Sample product names in catalog spelling. Returns (samples, unknown names, fuzzy matches).
 
     strict (form): unknown products raise UnknownProductsError.
-    not strict (chat): closest match; an unmatched product keeps its name on the
-    sample (compliance needs it) and is also returned in the unmatched list.
+    not strict (chat): closest match; unknown products are returned so the caller can
+    ask the rep to pick (an unmatched sample is never saved).
     """
     if not samples:
-        return [], []
-    names = [str(s.get("product", "")) for s in samples]
+        return [], [], []
+    names = [" ".join(str(s.get("product", "")).split()) for s in samples]
     if strict:
         canonical = await require_catalog_products(db, names)
         by_lower = {c.lower(): c for c in canonical}
-        return [{**s, "product": by_lower[" ".join(n.split()).lower()]} for s, n in zip(samples, names, strict=True)], []
+        return [{**s, "product": by_lower[n.lower()]} for s, n in zip(samples, names, strict=True)], [], []
     catalog = await catalog_products(db)
-    out, unmatched = [], []
+    out: list[dict[str, Any]] = []
+    unknown: list[str] = []
+    fuzzy: list[dict[str, str]] = []
     for s, n in zip(samples, names, strict=True):
         hit = closest_product(n, catalog)
         if hit is None:
-            unmatched.append(" ".join(n.split()))
-        out.append({**s, "product": hit or " ".join(n.split())})
-    return out, clean_names(unmatched)
+            unknown.append(n)
+            continue
+        out.append({**s, "product": hit})
+        if _changed(n, hit):
+            fuzzy.append({"product": hit, "from": n})
+    return out, clean_names(unknown), fuzzy
 
 
 async def seed_products(db: AsyncSession) -> int:
@@ -237,3 +265,26 @@ async def seed_materials(db: AsyncSession) -> int:
     )
     await db.commit()
     return int(result.rowcount or 0)  # type: ignore[attr-defined]  # CursorResult has rowcount; Result stub lacks it
+
+
+async def ensure_seed_admin(db: AsyncSession) -> Optional[str]:
+    """Create the ADMIN_EMAIL admin (with ADMIN_PASSWORD) if both are set and it doesn't exist.
+    Returns the admin's id, or None when not configured."""
+    from app.config import settings
+    from app.models import User
+    from app.security import hash_password
+
+    if not (settings.admin_email and settings.admin_password):
+        if not (await db.execute(select(User.id).where(User.role == "admin", User.is_active.is_(True)).limit(1))).first():
+            logger.warning("no active admin exists and ADMIN_EMAIL/ADMIN_PASSWORD are not set")
+        return None
+    existing = (
+        await db.execute(select(User).where(func.lower(User.email) == settings.admin_email.lower()))
+    ).scalar_one_or_none()
+    if existing:
+        return existing.id
+    admin = User(email=settings.admin_email, password_hash=hash_password(settings.admin_password), role="admin")
+    db.add(admin)
+    await db.commit()
+    logger.warning("seed admin %s created", settings.admin_email)
+    return admin.id

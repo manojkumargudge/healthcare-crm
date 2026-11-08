@@ -39,6 +39,8 @@ jobs:
       TEST_DATABASE_URL: postgresql+asyncpg://hcp_user:hcp_pass@localhost:5432/hcp_crm_test
       # Never a real key: tests block all Groq calls and fake the LLM.
       GROQ_API_KEY: ci-dummy-key
+      # Test-only signing secret (tests also set their own).
+      JWT_SECRET: ci-only-jwt-secret-not-used-anywhere-else-0123456789
 
     steps:
       - uses: actions/checkout@v7

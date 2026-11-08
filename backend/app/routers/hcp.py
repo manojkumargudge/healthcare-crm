@@ -2,11 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.authz import get_authz
 from app.database import get_db
 from app.models import HCP
 from app.schemas import HCPCreate, HCPOut
 
-router = APIRouter(prefix="/api/hcps", tags=["HCPs"])
+# HCPs (doctors) are shared company data: every signed-in rep can read and add them.
+router = APIRouter(prefix="/api/hcps", tags=["HCPs"], dependencies=[Depends(get_authz)])
 
 
 @router.get("", response_model=list[HCPOut])

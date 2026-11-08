@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { editInteraction } from "../store/interactionsSlice";
-import { formatScore, sentimentClass } from "../lib/format";
+import { formatScore, sentimentClass, withOriginal } from "../lib/format";
 
 
 export default function InteractionHistory() {
@@ -162,10 +162,19 @@ export default function InteractionHistory() {
 
                   <strong>Products:</strong>{" "}
 
-                  {item.products_discussed.join(", ")}
+                  {item.products_discussed.map((p) => withOriginal(p, "products_discussed", item.product_matches)).join(", ")}
 
                 </p>
 
+              )}
+
+              {item.samples_dropped?.length > 0 && (
+                <p style={{ marginTop: 8 }}>
+                  <strong>Samples:</strong>{" "}
+                  {item.samples_dropped
+                    .map((sd) => `${withOriginal(sd.product, "samples_dropped", item.product_matches)} × ${sd.qty}`)
+                    .join(", ")}
+                </p>
               )}
 
               {item.unmatched_products?.length > 0 && (

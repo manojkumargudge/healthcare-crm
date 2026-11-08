@@ -5,11 +5,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.catalog import resolve_materials
+from app.authz import get_authz
 from app.database import get_db
 from app.models import Material
 from app.schemas import MaterialCreate, MaterialOut
 
-router = APIRouter(prefix="/api/materials", tags=["Materials"])
+# Any signed-in rep can search and propose materials (pending until an admin approves).
+router = APIRouter(prefix="/api/materials", tags=["Materials"], dependencies=[Depends(get_authz)])
 
 
 @router.get("", response_model=list[MaterialOut])

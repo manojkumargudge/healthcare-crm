@@ -26,18 +26,21 @@ Interaction and Edit Interaction -- are mandatory per the task brief):
 """
 import json
 from datetime import date, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.authz import Authz
 from app.models import HCP, Interaction, FollowUp, utcnow
 from app.agent.llm import ainvoke_resilient
 from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
 from app.catalog import (
+    catalog_products,
     catalog_samples,
+    product_choices,
     clean_names,
     display_name,
     normalize_sentiment,
@@ -96,7 +99,19 @@ def _extract_json(text: str) -> dict:
     return {}
 
 
-def build_tools(db: AsyncSession) -> list[StructuredTool]:
+class SampleArg(BaseModel):
+    product: str = Field(description="Catalog product name")
+    qty: int = Field(ge=0, description="Number of units")
+
+
+def _matches(field: str, fuzzy: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [{"field": field, **m} for m in fuzzy]
+
+
+def build_tools(db: AsyncSession, authz: Authz) -> list[StructuredTool]:
+    """Tools bound to one DB session and one caller. Every tool applies the caller's
+    ownership rules (app/authz.py), exactly like the HTTP routes."""
+    user = authz.user
 
     # ---- 1. LOG INTERACTION -------------------------------------------------
     class LogInteractionArgs(BaseModel):
@@ -109,6 +124,11 @@ def build_tools(db: AsyncSession) -> list[StructuredTool]:
         materials_shared: Optional[list[str]] = Field(
             default=None, description="Materials/leave-behinds the rep shared, if mentioned"
         )
+        samples: Optional[list[SampleArg]] = Field(
+            default=None,
+            description="Samples left, with catalog product names. Use this after the rep has picked "
+            "products for samples that needed a choice; it replaces the samples extracted from raw_text.",
+        )
 
     async def log_interaction(
         hcp_id: str,
@@ -116,6 +136,7 @@ def build_tools(db: AsyncSession) -> list[StructuredTool]:
         interaction_type: str = "Visit",
         attendees: Optional[list[str]] = None,
         materials_shared: Optional[list[str]] = None,
+        samples: Optional[list[Any]] = None,
     ) -> str:
         hcp = await db.get(HCP, hcp_id)
         if not hcp:
@@ -150,20 +171,41 @@ Notes:
         material_names = await resolve_materials(
             db, list(materials_shared or []) + list(data.get("materials_shared") or [])
         )
-        # Admin-only catalog: map to the closest product, keep the rest in unmatched_products.
-        product_names, unmatched = await match_products(db, data.get("products_discussed") or [])
-        samples, unmatched_samples = await catalog_samples(
-            db, coerce_samples(data.get("samples_dropped", []), source="log_interaction"), strict=False
+        # Samples must be catalog products. Anything that can't be matched is never
+        # saved: nothing is logged yet, and the agent asks the rep to pick.
+        raw_samples = (
+            [s.model_dump() if isinstance(s, BaseModel) else s for s in samples]
+            if samples is not None
+            else data.get("samples_dropped", [])
         )
+        sample_rows, unknown_samples, sample_fuzzy = await catalog_samples(
+            db, coerce_samples(raw_samples, source="log_interaction"), strict=False
+        )
+        if unknown_samples:
+            await db.rollback()
+            catalog = await catalog_products(db)
+            return json.dumps({
+                "status": "needs_product_choice",
+                "saved": False,
+                "unknown_sample_products": unknown_samples,
+                "choices": {n: product_choices(n, catalog) for n in unknown_samples},
+                "message": "Nothing was saved. Ask the rep which catalog product each of these samples is "
+                "(offer the choices), then call log_interaction again with the same notes and the full "
+                "`samples` list using catalog names.",
+            })
+        # Products discussed: closest catalog product; unmatched names are kept for review.
+        product_names, unmatched, product_fuzzy = await match_products(db, data.get("products_discussed") or [])
 
         interaction = Interaction(
             hcp_id=hcp_id,
+            owner_id=user.id,
             interaction_type=interaction_type,
             channel="chat",
             interaction_date=date.today(),
             products_discussed=product_names,
-            unmatched_products=clean_names(unmatched + unmatched_samples),
-            samples_dropped=samples,
+            unmatched_products=unmatched,
+            product_matches=_matches("products_discussed", product_fuzzy) + _matches("samples_dropped", sample_fuzzy),
+            samples_dropped=sample_rows,
             materials_shared=material_names,
             key_topics=data.get("key_topics", []),
             attendees=attendee_names,
@@ -187,6 +229,7 @@ Notes:
             "samples_dropped": interaction.samples_dropped,
             "materials_shared": interaction.materials_shared,
             "unmatched_products": interaction.unmatched_products,
+            "product_matches": interaction.product_matches,
             "attendees": interaction.attendees,
             "compliance_flag": interaction.compliance_flag,
             "compliance_notes": interaction.compliance_notes,
@@ -205,8 +248,11 @@ Notes:
 
     async def edit_interaction(interaction_id: str, updates: str, edit_reason: Optional[str] = None) -> str:
         interaction = await db.get(Interaction, interaction_id)
-        if not interaction:
+        if not authz.can_read(interaction):
             return json.dumps({"error": f"No interaction found with id {interaction_id}"})
+        if not authz.can_write(interaction):
+            return json.dumps({"error": "Not allowed to change this interaction (it belongs to another rep)."})
+        assert interaction is not None  # can_read() above rejects None
 
         try:
             update_dict = json.loads(updates) if isinstance(updates, str) else updates
@@ -216,19 +262,34 @@ Notes:
         allowed_fields = {
             "interaction_type", "products_discussed", "samples_dropped",
             "materials_shared", "key_topics", "raw_notes", "hcp_sentiment", "attendees",
-            "outcomes", "follow_up_actions", "unmatched_products",
+            "outcomes", "follow_up_actions", "unmatched_products", "product_matches",
         }
-        new_unmatched: list[str] = []
+        update_dict.pop("unmatched_products", None)  # derived, not directly editable
+        update_dict.pop("product_matches", None)
+        matches = list(interaction.product_matches or [])
         if "samples_dropped" in update_dict:
-            update_dict["samples_dropped"], miss = await catalog_samples(
+            rows, unknown, fuzzy = await catalog_samples(
                 db, coerce_samples(update_dict["samples_dropped"], source="edit_interaction"), strict=False
             )
-            new_unmatched += miss
+            if unknown:
+                await db.rollback()
+                catalog = await catalog_products(db)
+                return json.dumps({
+                    "status": "needs_product_choice",
+                    "saved": False,
+                    "unknown_sample_products": unknown,
+                    "choices": {n: product_choices(n, catalog) for n in unknown},
+                    "message": "Nothing was changed. Ask the rep to pick catalog products for these samples.",
+                })
+            update_dict["samples_dropped"] = rows
+            matches = [m for m in matches if m.get("field") != "samples_dropped"] + _matches("samples_dropped", fuzzy)
         if "products_discussed" in update_dict:
-            update_dict["products_discussed"], miss = await match_products(db, update_dict["products_discussed"])
-            new_unmatched += miss
-        if new_unmatched:
-            update_dict["unmatched_products"] = clean_names(list(interaction.unmatched_products or []) + new_unmatched)
+            update_dict["products_discussed"], miss, fuzzy = await match_products(db, update_dict["products_discussed"])
+            matches = [m for m in matches if m.get("field") != "products_discussed"] + _matches("products_discussed", fuzzy)
+            if miss:
+                update_dict["unmatched_products"] = clean_names(list(interaction.unmatched_products or []) + miss)
+        if matches != list(interaction.product_matches or []):
+            update_dict["product_matches"] = matches
         if "attendees" in update_dict:
             update_dict["attendees"] = await resolve_attendees(db, update_dict["attendees"])
         if "materials_shared" in update_dict:
@@ -300,7 +361,7 @@ Notes:
             return json.dumps({"error": f"No HCP found with id {hcp_id}"})
 
         result = await db.execute(
-            select(Interaction)
+            authz.read_filter(select(Interaction), Interaction)
             .where(Interaction.hcp_id == hcp_id)
             .order_by(Interaction.interaction_date.desc())
             .limit(5)
@@ -358,8 +419,18 @@ Notes:
         if not hcp:
             return json.dumps({"error": f"No HCP found with id {hcp_id}"})
 
+        if interaction_id:
+            linked = await db.get(Interaction, interaction_id)
+            if not authz.can_read(linked):
+                return json.dumps({"error": f"No interaction found with id {interaction_id}"})
+            if not authz.can_write(linked):
+                return json.dumps({"error": "Not allowed to add follow-ups to another rep's interaction."})
+            assert linked is not None
+            if linked.hcp_id != hcp_id:
+                return json.dumps({"error": "That interaction is with a different HCP."})
         follow_up = FollowUp(
             hcp_id=hcp_id,
+            owner_id=user.id,
             interaction_id=interaction_id,
             due_date=date.today() + timedelta(days=days_from_now),
             reason=reason,
@@ -385,7 +456,7 @@ Notes:
             return json.dumps({"error": f"No HCP found with id {hcp_id}"})
 
         result = await db.execute(
-            select(Interaction)
+            authz.read_filter(select(Interaction), Interaction)
             .where(Interaction.hcp_id == hcp_id)
             .order_by(Interaction.interaction_date.desc())
             .limit(3)

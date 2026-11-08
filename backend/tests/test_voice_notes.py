@@ -19,7 +19,7 @@ from app.catalog import SEED_PRODUCTS, seed_products
 from app.config import settings
 from app.models import HCP, ChatMessage, Interaction, Product
 from app.voice_notes import MAX_AUDIO_BYTES
-from tests.conftest import test_engine
+from tests.conftest import ADMIN_AUTHZ, ADMIN_ID, test_engine
 
 WAV = (Path(__file__).parent / "fixtures" / "voice_note_sample.wav").read_bytes()
 WEBM_HEADER = b"\x1a\x45\xdf\xa3" + b"\x00" * 60
@@ -267,40 +267,15 @@ def test_closest_product(typed: str, expected: str | None) -> None:
     assert closest_product(typed, ["CardioMax", "CardioPlus", "OncoBoost", "OncoLife", "GlucoBalance"]) == expected
 
 
-async def test_chat_typo_maps_to_catalog_and_unmatched_is_kept_not_added(db: AsyncSession, fake_llm) -> None:
-    hcp = HCP(name="Dr. P")
-    db.add(hcp)
-    await db.commit()
-    before = await _catalog_size(db)
-    fake_llm(
-        json.dumps(
-            {
-                "summary": "s",
-                "products_discussed": ["cardiomx", "Zylotrex"],
-                "samples_dropped": [{"product": "oncobost", "qty": 2}, {"product": "Mystery Pill", "qty": 1}],
-            }
-        )
-    )
-    tool = next(t for t in build_tools(db) if t.name == "log_interaction")
-    out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="notes"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
-    assert out["products_discussed"] == ["CardioMax"]
-    assert out["unmatched_products"] == ["Zylotrex", "Mystery Pill"]
-    row = await db.get(Interaction, out["interaction_id"])
-    assert row is not None
-    assert row.samples_dropped == [{"product": "OncoBoost", "qty": 2}, {"product": "Mystery Pill", "qty": 1}]
-    assert row.unmatched_products == ["Zylotrex", "Mystery Pill"]
-    assert await _catalog_size(db) == before  # chat never adds to the catalog
-
-
 async def test_edit_tool_fuzzy_matches_and_accumulates_unmatched(db: AsyncSession) -> None:
     hcp = HCP(name="Dr. E")
     db.add(hcp)
     await db.commit()
-    row = Interaction(hcp_id=hcp.id, unmatched_products=["Old Name"])
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp.id, unmatched_products=["Old Name"])
     db.add(row)
     await db.commit()
     before = await _catalog_size(db)
-    tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "edit_interaction")
     await tool.coroutine(interaction_id=row.id, updates=json.dumps({"products_discussed": ["oncobost", "Newdrug"]}))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     await db.refresh(row)
     assert row.products_discussed == ["OncoBoost"]

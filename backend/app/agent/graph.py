@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.llm import ainvoke_resilient
 from app.agent.tools import build_tools
+from app.authz import Authz
 
 SYSTEM_PROMPT = """You are an AI assistant embedded in a pharmaceutical CRM,
 helping a field representative log and manage interactions with Healthcare
@@ -45,6 +46,10 @@ Guidelines:
   don't already know the HCP, then call log_interaction with their notes.
 - If samples were mentioned, call check_sample_compliance after logging
   and mention any flags to the rep.
+- If a tool returns status "needs_product_choice", nothing was saved: ask the
+  rep which catalog product each listed sample is (offer the choices), then call
+  log_interaction again with the same notes and the full `samples` list.
+- Products are only ever from the company catalog; never invent product names.
 - If the rep asks to change something they already logged, use
   edit_interaction.
 - If it's a good moment for a follow-up (HCP asked a question you couldn't
@@ -61,8 +66,8 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
 
 
-def build_agent_graph(db: AsyncSession):
-    tools = build_tools(db)
+def build_agent_graph(db: AsyncSession, authz: Authz):
+    tools = build_tools(db, authz)
 
     async def agent_node(state: AgentState):
         messages = state["messages"]
