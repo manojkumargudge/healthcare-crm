@@ -50,10 +50,14 @@ IMPORTANT:
     await db.commit()
 
     graph = build_agent_graph(db)
+    turn_start = len(history)  # history already includes this turn's user message
     result = await graph.ainvoke({"messages": history})
 
-    new_messages = result["messages"]
-    _SESSION_HISTORY[payload.session_id] = new_messages
+    all_messages = result["messages"]
+    _SESSION_HISTORY[payload.session_id] = all_messages
+    # Only what the agent produced during *this* turn. The graph returns the
+    # whole session; reporting/persisting all of it duplicated earlier turns.
+    new_messages = all_messages[turn_start:]
 
     tool_calls_log = []
     final_reply = ""
@@ -87,6 +91,7 @@ IMPORTANT:
                     role="tool",
                     content=str(m.content),
                     tool_name=m.name,
+                    tool_call_id=m.tool_call_id,
                 )
             )
 

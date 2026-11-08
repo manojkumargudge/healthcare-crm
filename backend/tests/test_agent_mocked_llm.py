@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import llm as llm_module
 from app.agent.tools import _extract_json, build_tools
-from app.models import HCP, Interaction
+from sqlalchemy import select
+
+from app.models import HCP, ChatMessage, Interaction
 from tests.conftest import GroqCalledError
 
 
@@ -27,7 +29,7 @@ class _FakeChatGroq:
     tried: list[str] = []
     failures: dict[str, Exception] = {}
 
-    def __init__(self, *, api_key: str, model: str, temperature: float) -> None:
+    def __init__(self, *, model: str, **_kwargs: Any) -> None:
         self.model = model
 
     def bind_tools(self, tools: Any) -> "_FakeChatGroq":
@@ -79,11 +81,32 @@ async def test_resilient_fast_uses_fast_model(fake_chatgroq: type[_FakeChatGroq]
     assert fake_chatgroq.tried == [FAST]
 
 
-async def test_resilient_falls_back_to_other_model_on_decommissioned(fake_chatgroq: type[_FakeChatGroq]) -> None:
-    fake_chatgroq.failures = {MAIN: RuntimeError("The model `x` has been decommissioned")}
+async def test_resilient_falls_back_to_other_model_on_decommissioned(
+    fake_chatgroq: type[_FakeChatGroq], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="hcp_crm.agent.llm")
+    fake_chatgroq.failures = {MAIN: RuntimeError("The model `main-model-x` has been decommissioned")}
     _resp, model = await llm_module.ainvoke_resilient("hi")
     assert model == FAST
     assert fake_chatgroq.tried == [MAIN, FAST]
+    [record] = [r for r in caplog.records if r.name == "hcp_crm.agent.llm"]
+    assert record.levelname == "WARNING"
+    assert record.getMessage() == (
+        f"Groq model fallback: {MAIN} -> {FAST} (reason: The model `main-model-x` has been decommissioned)"
+    )
+
+
+async def test_fallback_warning_when_no_model_left(
+    fake_chatgroq: type[_FakeChatGroq], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level("WARNING", logger="hcp_crm.agent.llm")
+    fake_chatgroq.failures = {m: RuntimeError("model_not_found") for m in (MAIN, FAST)}
+    with pytest.raises(RuntimeError):
+        await llm_module.ainvoke_resilient("hi")
+    assert [r.getMessage() for r in caplog.records if r.name == "hcp_crm.agent.llm"] == [
+        f"Groq model fallback: {MAIN} -> {FAST} (reason: model_not_found)",
+        f"Groq model fallback: {FAST} -> none left (reason: model_not_found)",
+    ]
 
 
 async def test_resilient_does_not_retry_other_errors(fake_chatgroq: type[_FakeChatGroq]) -> None:
@@ -285,3 +308,126 @@ async def test_edit_interaction_tool_without_samples_skips_compliance(db: AsyncS
     assert "compliance_flag" not in out
     await db.refresh(row)
     assert (row.compliance_flag, row.compliance_notes) == (True, "n")
+
+
+# ------------------------------------------------ shared Groq client --------
+@pytest.fixture
+async def fresh_groq_client():
+    await llm_module.close_groq_client()
+    yield
+    await llm_module.close_groq_client()
+
+
+async def test_one_shared_groq_client_across_calls(fresh_groq_client: None) -> None:
+    a = llm_module._chat("m1", 0.1)
+    b = llm_module._chat("m2", 0.5)
+    assert llm_module._clients is not None
+    sync_client, async_client = llm_module._clients
+    assert a.async_client is b.async_client is async_client.chat.completions
+    assert a.client is b.client is sync_client.chat.completions
+
+
+async def test_init_is_idempotent_and_close_releases_client(fresh_groq_client: None) -> None:
+    llm_module.init_groq_client()
+    first = llm_module._clients
+    llm_module.init_groq_client()
+    assert llm_module._clients is first and first is not None
+    sync_client, async_client = first
+    await llm_module.close_groq_client()
+    assert llm_module._clients is None
+    assert async_client.is_closed() and sync_client.is_closed()
+    await llm_module.close_groq_client()  # second close is a no-op
+
+
+async def test_lifespan_creates_and_closes_shared_client(
+    fresh_groq_client: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import main as main_module
+
+    async def noop() -> None:
+        return None
+
+    monkeypatch.setattr(main_module, "init_db", noop)
+    async with main_module.app.router.lifespan_context(main_module.app):
+        assert llm_module._clients is not None
+        _sync, async_client = llm_module._clients
+    assert llm_module._clients is None
+    assert async_client.is_closed()
+
+
+# --------------------------------------------- chat turns: no duplicates ----
+async def test_three_turns_store_one_log_interaction_row(
+    client: httpx.AsyncClient, hcp: dict, db: AsyncSession, fake_llm
+) -> None:
+    """Regression: every turn used to re-save all earlier tool messages and
+    report the whole session's tool calls."""
+    fake_llm(
+        # turn 1: tool call -> extraction -> final reply
+        AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "log_interaction", "args": {"hcp_id": hcp["id"], "raw_text": "visit"}, "id": "call_log_1"}
+            ],
+        ),
+        json.dumps({"summary": "Visit logged."}),
+        AIMessage(content="Logged it."),
+        # turns 2 and 3: plain replies
+        AIMessage(content="Anything else?"),
+        AIMessage(content="Done."),
+    )
+    bodies = []
+    for msg in ("met the doctor", "thanks", "bye"):
+        resp = await client.post(
+            "/api/chat/turn", json={"session_id": "dupes-1", "message": msg, "hcp_id": hcp["id"]}
+        )
+        assert resp.status_code == 200, resp.text
+        bodies.append(resp.json())
+
+    assert [len(b["tool_calls"]) for b in bodies] == [1, 0, 0]
+    assert bodies[0]["tool_calls"][0]["tool"] == "log_interaction"
+    assert bodies[0]["interaction"] is not None
+    assert bodies[1]["interaction"] is None and bodies[2]["interaction"] is None  # not re-reported
+    assert [b["reply"] for b in bodies] == ["Logged it.", "Anything else?", "Done."]
+
+    rows = (await db.execute(select(ChatMessage).where(ChatMessage.session_id == "dupes-1"))).scalars().all()
+    tool_rows = [r for r in rows if r.role == "tool"]
+    assert [(r.tool_name, r.tool_call_id) for r in tool_rows] == [("log_interaction", "call_log_1")]
+    assert sorted(r.role for r in rows) == ["assistant"] * 3 + ["tool"] + ["user"] * 3
+    assert len((await db.execute(select(Interaction))).scalars().all()) == 1
+
+
+async def test_tool_calls_in_later_turn_are_reported_alone(client: httpx.AsyncClient, hcp: dict, fake_llm) -> None:
+    fake_llm(
+        AIMessage(content="", tool_calls=[{"name": "get_hcp_context", "args": {"hcp_id": hcp["id"]}, "id": "c1"}]),
+        AIMessage(content="Here is the context."),
+        AIMessage(content="", tool_calls=[{"name": "get_hcp_context", "args": {"hcp_id": hcp["id"]}, "id": "c2"}]),
+        AIMessage(content="Same context again."),
+    )
+    turn = {"session_id": "dupes-2", "hcp_id": hcp["id"]}
+    first = (await client.post("/api/chat/turn", json={**turn, "message": "ctx"})).json()
+    second = (await client.post("/api/chat/turn", json={**turn, "message": "ctx again"})).json()
+    expected = [{"tool": "get_hcp_context", "args": {"hcp_id": hcp["id"]}}]
+    assert first["tool_calls"] == expected
+    assert second["tool_calls"] == expected
+    history = (await client.get("/api/chat/dupes-2/history")).json()
+    assert [h["role"] for h in history].count("tool") == 2  # one per real call, not 1 + 2
+
+
+# ------------------------------------------- sentiment label vs score -------
+async def test_edit_tool_nulls_score_when_sentiment_label_changes(db: AsyncSession) -> None:
+    hcp = HCP(name="Dr. S")
+    db.add(hcp)
+    await db.commit()
+    row = Interaction(hcp_id=hcp.id, hcp_sentiment="Positive", sentiment_score=0.6)
+    db.add(row)
+    await db.commit()
+
+    tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
+    out = json.loads(
+        await tool.coroutine(interaction_id=row.id, updates=json.dumps({"hcp_sentiment": "Neutral"}))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
+    )
+    assert sorted(out["changed_fields"]) == ["hcp_sentiment", "sentiment_score"]
+    await db.refresh(row)
+    assert (row.hcp_sentiment, row.sentiment_score) == ("Neutral", None)
+    assert row.edit_history[-1]["before"] == {"hcp_sentiment": "Positive", "sentiment_score": 0.6}
+    assert row.edit_history[-1]["after"] == {"hcp_sentiment": "Neutral", "sentiment_score": None}

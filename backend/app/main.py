@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.agent.llm import close_groq_client, init_groq_client
 from app.database import engine, init_db
 from app.routers import hcp, interactions, chat
 
@@ -13,8 +14,12 @@ from app.routers import hcp, interactions, chat
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await init_db()
-    yield
-    await engine.dispose()
+    init_groq_client()
+    try:
+        yield
+    finally:
+        await close_groq_client()
+        await engine.dispose()
 
 
 app = FastAPI(title="AI-First HCP CRM", version="1.0.0", lifespan=lifespan)
