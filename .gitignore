@@ -22,3 +22,7 @@ dist/
 
 # Local database dumps (may contain real data)
 backups/
+
+# Playwright
+frontend/playwright-report/
+frontend/test-results/

@@ -172,6 +172,19 @@ npm test
 - Config fail-fast, the startup lifespan, UTC timestamps, and the migration below.
 - On the frontend, one smoke test per Redux slice.
 
+**End-to-end tests** (Playwright, `frontend/e2e/`) run the real UI against the real backend and database. Only Groq is replaced, by a local fake server (`frontend/e2e/support/fake_groq.py`, reached through `GROQ_BASE_URL`). They cover:
+- sign-in for each role
+- logging via the form and via chat, and editing
+- the voice-note consent gate
+- material approval
+
+CI runs them on every push. To run them locally (this wipes the `*_test` database you point them at):
+
+```bash
+cd frontend
+E2E_DATABASE_URL=postgresql+asyncpg://hcp_user:hcp_pass@127.0.0.1:55433/hcp_crm_test E2E_PYTHON=../backend/venv/bin/python PW_CHANNEL=msedge npm run e2e   # PW_CHANNEL: use an installed Edge/Chrome
+```
+
 **No real LLM calls:** a fixture fails any test that tries to reach Groq, and LLM paths use a scripted fake.
 
 **Live tests** (`tests/test_live_groq.py`, marker `live`) run a real chat session against Groq that exercises all 6 tools and checks the database rows. They are skipped unless enabled, and CI never enables them:
