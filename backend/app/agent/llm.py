@@ -1,32 +1,26 @@
 """
 Groq LLM clients for the agent.
 
-Note on model deprecation:
-  Groq periodically retires older models (see console.groq.com/docs/deprecations).
-  At the time this project was built, BOTH models named in the assignment brief --
-  `gemma2-9b-it` (primary) and `llama-3.3-70b-versatile` (fallback/heavier
-  reasoning) -- are on Groq's deprecation list. We keep them as the configured
-  *primary* choice everywhere (env defaults, per the brief), but every call that
-  hits Groq goes through `ainvoke_resilient`, which retries against a short chain
-  of currently-supported replacement models if -- and only if -- Groq's response
-  indicates the requested model is decommissioned/unknown. Any other error
-  (auth, rate limit, network) is raised immediately rather than silently retried.
+Models are configured only through settings (env vars), never hardcoded here:
 
-  This means: if `gemma2-9b-it` is live again by the time this is graded, it's
-  used exactly as specified. If Groq has removed it, the app keeps working
-  instead of hard-crashing the demo.
+  GROQ_MODEL       main model: the tool-calling agent loop and
+                   next-best-action recommendations.
+  GROQ_MODEL_FAST  fast model: structured extraction / summarization
+                   (e.g. turning a rep's notes into CRM fields).
+
+Groq retires models over time (console.groq.com/docs/deprecations). Every call
+goes through `ainvoke_resilient`: if Groq says the requested model is
+decommissioned or unknown, the call is retried once with the *other*
+configured model. Any other error (auth, rate limit, network) is raised
+immediately rather than silently retried.
 """
 import logging
+
 from langchain_groq import ChatGroq
+
 from app.config import settings
 
 logger = logging.getLogger("hcp_crm.agent.llm")
-
-# Chains are ordered: assignment-mandated model first, then Groq's own
-# recommended replacements (per Groq's deprecation announcements), most
-# recent first.
-PRIMARY_CHAIN = [settings.groq_model, "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
-HEAVY_CHAIN = [settings.groq_fallback_model, "openai/gpt-oss-120b", "qwen/qwen3-32b"]
 
 _DECOMMISSION_HINTS = (
     "decommission",
@@ -47,34 +41,33 @@ def _dedupe(seq):
     return out
 
 
+def model_chain(fast: bool = False) -> list[str]:
+    """Models to try, in order. Read at call time so settings changes apply."""
+    main, quick = settings.groq_model, settings.groq_model_fast
+    return _dedupe([quick, main] if fast else [main, quick])
+
+
 def get_llm(temperature: float = 0.2) -> ChatGroq:
-    """Primary LLM: Groq gemma2-9b-it (assignment-mandated). Used for the
-    tool-calling agent loop and structured extraction/summarization calls.
-    Prefer `ainvoke_resilient` over calling this directly + `.ainvoke()`,
-    so a Groq-side deprecation doesn't hard-fail the request."""
+    """Main model (GROQ_MODEL). Prefer `ainvoke_resilient`, which survives a
+    Groq-side model retirement."""
     return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_model, temperature=temperature)
 
 
-def get_fallback_llm(temperature: float = 0.2) -> ChatGroq:
-    """Heavier-reasoning LLM: llama-3.3-70b-versatile (assignment-mandated).
-    Used for compliance judgement calls and next-best-action recommendations."""
-    return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_fallback_model, temperature=temperature)
+def get_fast_llm(temperature: float = 0.2) -> ChatGroq:
+    """Fast model (GROQ_MODEL_FAST) for extraction/summarization."""
+    return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_model_fast, temperature=temperature)
 
 
-async def ainvoke_resilient(messages, temperature: float = 0.2, tools=None, heavy: bool = False):
-    """Invoke Groq, walking a fallback chain of model names.
+async def ainvoke_resilient(messages, temperature: float = 0.2, tools=None, fast: bool = False):
+    """Invoke Groq with the main model (or the fast one if `fast=True`).
 
-    Tries each model in order (assignment-mandated model first). Only moves
-    to the next model if the error looks like a decommissioned/unknown-model
-    response from Groq; any other exception (bad API key, rate limit, network)
-    is raised immediately so it surfaces as a real error instead of being
-    masked by a silent retry.
+    Falls back to the other configured model only when Groq reports the
+    requested one as decommissioned/unknown; every other error is raised.
 
     Returns (response, model_name_actually_used).
     """
-    chain = _dedupe(HEAVY_CHAIN if heavy else PRIMARY_CHAIN)
     last_err = None
-    for model_name in chain:
+    for model_name in model_chain(fast):
         llm = ChatGroq(api_key=settings.groq_api_key, model=model_name, temperature=temperature)
         if tools:
             llm = llm.bind_tools(tools)  # type: ignore[assignment]  # bind_tools returns a Runnable, not ChatGroq; only .ainvoke is used after
@@ -84,8 +77,8 @@ async def ainvoke_resilient(messages, temperature: float = 0.2, tools=None, heav
         except Exception as e:
             msg = str(e).lower()
             if any(hint in msg for hint in _DECOMMISSION_HINTS):
-                logger.warning("Groq model '%s' unavailable (%s) — trying next fallback.", model_name, e)
+                logger.warning("Groq model '%s' unavailable (%s) — trying the other configured model.", model_name, e)
                 last_err = e
                 continue
             raise
-    raise last_err or RuntimeError("All Groq models in the fallback chain failed.")
+    raise last_err or RuntimeError("No Groq model configured.")

@@ -184,3 +184,34 @@ async def test_timestamptz_migration_preserves_naive_utc_values_exactly(_schema:
             ).scalar_one()
             assert utc_text == "2025-12-31 23:59:58.123456", f"{table}.{column}"
         await conn.exec_driver_sql("DROP SCHEMA legacy_vals CASCADE")
+
+
+@pytest.mark.usefixtures("no_env")
+def test_groq_model_defaults_and_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://u@h/db")
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    for var in ("GROQ_MODEL", "GROQ_MODEL_FAST"):
+        monkeypatch.delenv(var, raising=False)
+    s = config.load_settings()
+    assert (s.groq_model, s.groq_model_fast) == ("openai/gpt-oss-120b", "openai/gpt-oss-20b")
+
+    monkeypatch.setenv("GROQ_MODEL", "m-main")
+    monkeypatch.setenv("GROQ_MODEL_FAST", "m-fast")
+    s = config.load_settings()
+    assert (s.groq_model, s.groq_model_fast) == ("m-main", "m-fast")
+
+
+@pytest.mark.usefixtures("no_env")
+def test_retired_env_keys_in_dotenv_do_not_break_startup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "DATABASE_URL=postgresql+asyncpg://u@h/db",
+                "GROQ_API_KEY=k",
+                "GROQ_FALLBACK_MODEL=llama-3.3-70b-versatile",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    s = config.load_settings()  # cwd is tmp_path (no_env fixture)
+    assert s.groq_api_key == "k"

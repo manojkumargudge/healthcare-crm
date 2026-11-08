@@ -34,18 +34,22 @@ This is a working prototype. There is no authentication; see [Security notes](#s
 - **Backend:** FastAPI app in `backend/app/`. Tables are created on startup (`create_all` in the FastAPI lifespan). Settings come from the environment; the app refuses to start without `DATABASE_URL` and `GROQ_API_KEY`.
 - **Frontend:** React + Redux Toolkit in `frontend/src/`, with one slice each for HCPs, interactions, chat and the form draft.
 - **Agent:** `backend/app/agent/graph.py` is a two-node LangGraph loop (`agent` → `tools` → `agent` …). It ends when the model replies without requesting a tool. Chat history for a session is kept in process memory, and each turn is also written to `chat_messages`.
-- **LLM:** Groq via `langchain-groq`, with `gemma2-9b-it` as primary and `llama-3.3-70b-versatile` for heavier reasoning. If Groq reports a model as decommissioned or unknown, `backend/app/agent/llm.py` falls back to a short list of current models. Other errors (auth, rate limit, network) are raised, not retried.
+- **LLM:** Groq via `langchain-groq`. Two models, both set by environment variables:
+  - `GROQ_MODEL` (default `openai/gpt-oss-120b`) runs the tool-calling agent and next-best-action recommendations.
+  - `GROQ_MODEL_FAST` (default `openai/gpt-oss-20b`) does extraction and summarization.
+  - If Groq reports one model as decommissioned or unknown, `backend/app/agent/llm.py` retries once with the other. Other errors (auth, rate limit, network) are raised, not retried.
+  - The assignment brief names `gemma2-9b-it` and `llama-3.3-70b-versatile`. Both are decommissioned on Groq (`gemma2-9b-it` shut down on 2025-10-08, `llama-3.3-70b-versatile` on 2026-08-16) and are not used.
 
 ### The 6 agent tools (`backend/app/agent/tools.py`)
 
 | Tool | What it does |
 |---|---|
-| `log_interaction` | Sends the rep's notes to the LLM, extracts summary, products, samples, materials, topics and sentiment, and saves an interaction with the raw notes. Invalid samples in the LLM output are skipped with a logged warning. |
+| `log_interaction` | Sends the rep's notes to the fast model (`GROQ_MODEL_FAST`), extracts summary, products, samples, materials, topics and sentiment, and saves an interaction with the raw notes. Invalid samples in the LLM output are skipped with a logged warning. |
 | `edit_interaction` | Updates given fields of an interaction, appends a before/after entry to its edit history, and re-runs the compliance check if samples changed. The form's PATCH endpoint uses this same tool. |
 | `get_hcp_context` | Returns an HCP's profile and 5 most recent interactions. |
 | `check_sample_compliance` | Checks sample quantities against per-state limits: Vermont 0, California 2, Minnesota 2, otherwise 4. The ruleset is illustrative, not regulatory data. |
 | `schedule_follow_up` | Creates a follow-up task for an HCP with a due date and reason. |
-| `suggest_next_best_action` | Uses the heavier model on recent history to recommend a next step. |
+| `suggest_next_best_action` | Uses the main model (`GROQ_MODEL`) on recent history to recommend a next step. |
 
 ### API
 
@@ -72,7 +76,7 @@ Needs Docker with Compose v2 and a Groq API key ([console.groq.com/keys](https:/
 git clone https://github.com/manojkumargudge/healthcare-crm.git
 cd healthcare-crm
 cp .env.example .env
-# edit .env: set POSTGRES_PASSWORD and GROQ_API_KEY
+# edit .env: set POSTGRES_PASSWORD and GROQ_API_KEY (GROQ_MODEL / GROQ_MODEL_FAST have working defaults)
 docker compose up -d --build --wait
 curl http://127.0.0.1:8000/health      # {"status":"healthy"}
 ```
@@ -145,6 +149,12 @@ npm test
 - On the frontend, one smoke test per Redux slice.
 
 **No real LLM calls:** a fixture fails any test that tries to reach Groq, and LLM paths use a scripted fake.
+
+**Live tests** (`tests/test_live_groq.py`, marker `live`) run a real chat session against Groq that exercises all 6 tools and checks the database rows. They are skipped unless enabled, and CI never enables them:
+
+```bash
+RUN_LIVE_GROQ=1 LIVE_GROQ_API_KEY=<your key> pytest -m live -v   # same TEST_DATABASE_URL as above
+```
 
 **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on every push to `main` and every pull request, with two jobs:
 - **Backend:** ruff, mypy, and pytest against a Postgres 16 service.

@@ -103,7 +103,7 @@ Extract structured data and return ONLY valid JSON, no prose, no markdown fences
 
 Notes:
 \"\"\"{raw_text}\"\"\""""
-        response, _model_used = await ainvoke_resilient(extraction_prompt, temperature=0.1)
+        response, _model_used = await ainvoke_resilient(extraction_prompt, temperature=0.1, fast=True)
         data = _extract_json(response.content)
 
         interaction = Interaction(
@@ -307,7 +307,7 @@ Recent interaction history:
 In 2-3 sentences, recommend the single next best action the field rep should take
 with this HCP (e.g. what to discuss, what materials to bring, timing). Be concrete
 and specific to what's in the history. Return plain text, no JSON."""
-        response, _model_used = await ainvoke_resilient(prompt, temperature=0.4, heavy=True)
+        response, _model_used = await ainvoke_resilient(prompt, temperature=0.4)
         return json.dumps({"hcp_id": hcp_id, "next_best_action": response.content.strip()})
 
     return [

@@ -68,9 +68,8 @@ def build_agent_graph(db: AsyncSession):
         messages = state["messages"]
         if not any(isinstance(m, SystemMessage) for m in messages):
             messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
-        # Resilient: tries gemma2-9b-it first (assignment-mandated), falls
-        # through to a currently-supported Groq model only if Groq reports
-        # the requested one as decommissioned. See app/agent/llm.py.
+        # Main model (GROQ_MODEL); falls back to GROQ_MODEL_FAST only if Groq
+        # reports the main one as decommissioned. See app/agent/llm.py.
         response, _model_used = await ainvoke_resilient(messages, temperature=0.2, tools=tools)
         return {"messages": [response]}
 
