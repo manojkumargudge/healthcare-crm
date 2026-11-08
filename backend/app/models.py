@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, date, timezone
-from sqlalchemy import String, Text, Date, DateTime, ForeignKey, JSON, Float, Boolean
+from sqlalchemy import String, Text, Date, DateTime, ForeignKey, JSON, Float, Boolean, Index, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -46,6 +46,7 @@ class Interaction(Base):
     samples_dropped: Mapped[list] = mapped_column(JSON, default=list)  # [{"product": "..", "qty": n}]
     materials_shared: Mapped[list] = mapped_column(JSON, default=list)
     key_topics: Mapped[list] = mapped_column(JSON, default=list)
+    attendees: Mapped[list] = mapped_column(JSON, default=list)  # names of others present (HCP names when matched)
 
     hcp_sentiment: Mapped[str] = mapped_column(String(20), nullable=True)  # Positive/Neutral/Negative
     sentiment_score: Mapped[float] = mapped_column(Float, nullable=True)
@@ -88,3 +89,20 @@ class ChatMessage(Base):
     tool_name: Mapped[str] = mapped_column(String(50), nullable=True)
     tool_call_id: Mapped[str] = mapped_column(String(100), nullable=True)  # set on role="tool" rows
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Material(Base):
+    """Catalog of shareable materials (leave-behinds, studies, brochures) for the form picker.
+
+    Interactions keep `materials_shared` as a list of catalog names; unknown
+    names are added to the catalog when an interaction is saved.
+    """
+    __tablename__ = "materials"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# Case-insensitive uniqueness on the real column (matches migration 003).
+Index("uq_materials_name_lower", func.lower(Material.name), unique=True)

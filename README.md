@@ -44,8 +44,8 @@ This is a working prototype. There is no authentication; see [Security notes](#s
 
 | Tool | What it does |
 |---|---|
-| `log_interaction` | Sends the rep's notes to the fast model (`GROQ_MODEL_FAST`), extracts summary, products, samples, materials, topics and sentiment, and saves an interaction with the raw notes. Invalid samples in the LLM output are skipped with a logged warning. |
-| `edit_interaction` | Updates given fields of an interaction, appends a before/after entry to its edit history, and re-runs the compliance check if samples changed. The form's PATCH endpoint uses this same tool. |
+| `log_interaction` | Sends the rep's notes to the fast model (`GROQ_MODEL_FAST`), extracts summary, products, samples, materials, attendees, topics and sentiment, and saves an interaction with the raw notes. Also accepts attendees and materials as explicit arguments; materials are matched to the catalog. Invalid samples in the LLM output are skipped with a logged warning. |
+| `edit_interaction` | Updates given fields of an interaction, appends a before/after entry to its edit history, and re-runs the compliance check if samples changed. Accepts attendees and catalog materials; changing the sentiment label clears the AI score. The form's PATCH endpoint uses this same tool. |
 | `get_hcp_context` | Returns an HCP's profile and 5 most recent interactions. |
 | `check_sample_compliance` | Checks sample quantities against per-state limits: Vermont 0, California 2, Minnesota 2, otherwise 4. The ruleset is illustrative, not regulatory data. |
 | `schedule_follow_up` | Creates a follow-up task for an HCP with a due date and reason. |
@@ -55,13 +55,18 @@ This is a working prototype. There is no authentication; see [Security notes](#s
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/hcps` | List HCPs |
+| GET | `/api/hcps?q=` | List HCPs; `q` searches name, specialty and institution (attendee picker) |
 | POST | `/api/hcps` | Create an HCP |
 | GET | `/api/hcps/{hcp_id}` | Get one HCP |
 | GET | `/api/interactions?hcp_id=` | List interactions, optionally for one HCP |
 | POST | `/api/interactions` | Create from the form; runs compliance before saving |
 | PATCH | `/api/interactions/{interaction_id}` | Edit an interaction |
 | GET | `/api/interactions/{interaction_id}` | Get one interaction |
+| GET | `/api/interactions/{interaction_id}/follow-ups` | Follow-ups for an interaction (AI suggestions and accepted/scheduled ones) |
+| POST | `/api/interactions/{interaction_id}/follow-ups/suggestions` | Generate up to 3 AI follow-up suggestions (status `Suggested`); older unaccepted ones become `Superseded` |
+| PATCH | `/api/follow-ups/{follow_up_id}` | Accept (`Pending`) or dismiss (`Dismissed`) a suggestion, or mark `Done`/`Cancelled` |
+| GET | `/api/materials?q=` | Search the materials catalog |
+| POST | `/api/materials` | Add a material to the catalog (returns the existing one if the name already exists, case-insensitive) |
 | POST | `/api/chat/turn` | One chat turn: reply, tools called, any interaction logged |
 | GET | `/api/chat/{session_id}/history` | Stored messages for a chat session |
 | GET | `/health` | Liveness check |
@@ -169,6 +174,7 @@ There is no Alembic yet. New databases get their schema from `create_all` at sta
 |---|---|
 | `001_timestamps_to_timestamptz.sql` | Converts the timestamp columns to `timestamptz`, interpreting old values as UTC. Needed once for databases created before timestamps became timezone-aware. Without it, writes fail with `can't subtract offset-naive and offset-aware datetimes`. Safe to run more than once. |
 | `002_chat_messages_dedupe.sql` | Adds `chat_messages.tool_call_id` and removes duplicate tool rows left by an old chat bug that re-saved earlier tool messages on every turn. Only tool rows are deduplicated; repeated user/assistant messages are real and kept. Safe to run more than once. |
+| `003_attendees_materials.sql` | Adds `interactions.attendees` and the `materials` catalog table, and copies existing free-text materials into the catalog. The starter catalog is inserted by the backend on startup. Safe to run more than once. |
 
 Back up first, then run them in order against the Compose database:
 
@@ -176,7 +182,7 @@ Back up first, then run them in order against the Compose database:
 docker compose exec -T postgres pg_dump -U hcp_user -d hcp_crm -Fc > hcp_crm_backup.dump
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < backend/migrations/001_timestamps_to_timestamptz.sql
-# then the same command with 002_chat_messages_dedupe.sql
+# then the same command with 002_chat_messages_dedupe.sql and 003_attendees_materials.sql
 ```
 
 Replace `hcp_user` and `hcp_crm` with your `POSTGRES_USER` and `POSTGRES_DB`.

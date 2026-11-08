@@ -1,12 +1,8 @@
 import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { editInteraction } from "../store/interactionsSlice";
+import { formatScore, sentimentClass } from "../lib/format";
 
-function sentimentClass(sentiment) {
-  if (sentiment === "Positive") return "positive";
-  if (sentiment === "Negative") return "negative";
-  return "neutral";
-}
 
 export default function InteractionHistory() {
   const dispatch = useDispatch();
@@ -73,17 +69,16 @@ export default function InteractionHistory() {
 
             </div>
 
-            {item.hcp_sentiment && (
-
-              <span
-                className={`sentiment-tag ${sentimentClass(
-                  item.hcp_sentiment
-                )}`}
-              >
-                {item.hcp_sentiment}
+            <div className="history-sentiment">
+              {item.hcp_sentiment && (
+                <span className={`sentiment-tag ${sentimentClass(item.hcp_sentiment)}`}>
+                  {item.hcp_sentiment}
+                </span>
+              )}
+              <span className="sentiment-score" title="AI sentiment score (−1 to +1); — when not scored">
+                Score {formatScore(item.sentiment_score)}
               </span>
-
-            )}
+            </div>
 
           </div>
 
@@ -171,6 +166,18 @@ export default function InteractionHistory() {
 
                 </p>
 
+              )}
+
+              {item.attendees?.length > 0 && (
+                <p style={{ marginTop: 8 }}>
+                  <strong>Attendees:</strong> {item.attendees.join(", ")}
+                </p>
+              )}
+
+              {item.materials_shared?.length > 0 && (
+                <p style={{ marginTop: 8 }}>
+                  <strong>Materials:</strong> {item.materials_shared.join(", ")}
+                </p>
               )}
 
               {item.compliance_flag && (

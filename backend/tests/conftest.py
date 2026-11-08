@@ -119,6 +119,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
         fake = FakeLLM(*responses)
         monkeypatch.setattr("app.agent.tools.ainvoke_resilient", fake)
         monkeypatch.setattr("app.agent.graph.ainvoke_resilient", fake)
+        monkeypatch.setattr("app.follow_ups.ainvoke_resilient", fake)
         return fake
 
     return _install

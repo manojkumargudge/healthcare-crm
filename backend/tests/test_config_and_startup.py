@@ -120,13 +120,14 @@ async def test_lifespan_inits_db_and_disposes_engine(monkeypatch: pytest.MonkeyP
         calls.append("close_groq")
 
     monkeypatch.setattr(main_module, "init_db", fake_init_db)
+    monkeypatch.setattr(main_module, "seed_materials", lambda _s: fake_init_db())
     monkeypatch.setattr(main_module, "engine", FakeEngine())
     monkeypatch.setattr(main_module, "init_groq_client", lambda: calls.append("init_groq"))
     monkeypatch.setattr(main_module, "close_groq_client", fake_close_groq)
 
     async with main_module.app.router.lifespan_context(main_module.app):
-        assert calls == ["init_db", "init_groq"]
-    assert calls == ["init_db", "init_groq", "close_groq", "dispose"]
+        assert calls == ["init_db", "init_db", "init_groq"]  # init_db, then seed (reuses the fake)
+    assert calls == ["init_db", "init_db", "init_groq", "close_groq", "dispose"]
 
 
 def test_no_on_event_handlers() -> None:
@@ -161,7 +162,7 @@ async def test_schema_uses_timestamptz(db: AsyncSession) -> None:
             )
         )
     ).all()
-    assert len(rows) == 5
+    assert len(rows) == 6  # 5 original + materials.created_at
     assert {r.data_type for r in rows} == {"timestamp with time zone"}
 
 

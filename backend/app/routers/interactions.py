@@ -5,8 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.catalog import resolve_attendees, resolve_materials
+from app.follow_ups import list_follow_ups, suggest_follow_ups
 from app.models import Interaction
-from app.schemas import InteractionCreate, InteractionUpdate, InteractionOut
+from app.schemas import FollowUpOut, InteractionCreate, InteractionUpdate, InteractionOut
 from app.agent.tools import apply_compliance, build_tools
 from app.models import HCP
 
@@ -34,7 +36,10 @@ async def create_interaction(payload: InteractionCreate, db: AsyncSession = Depe
     data = payload.model_dump()
     if not data.get("interaction_date"):
         data["interaction_date"] = date_cls.today()
-    interaction = Interaction(**data)
+    data["attendees"] = await resolve_attendees(db, data["attendees"])
+    data["materials_shared"] = await resolve_materials(db, data["materials_shared"])
+    # Form-set sentiment label is authoritative; there is no LLM score for it.
+    interaction = Interaction(**data, sentiment_score=None)
 
     # Compliance is evaluated before anything is written, so the row and its
     # compliance result land in one commit; if the check raises, nothing is saved.
@@ -71,3 +76,30 @@ async def get_interaction(interaction_id: str, db: AsyncSession = Depends(get_db
     if not interaction:
         raise HTTPException(404, "Interaction not found")
     return interaction
+
+
+async def _interaction_or_404(db: AsyncSession, interaction_id: str) -> Interaction:
+    interaction = await db.get(Interaction, interaction_id)
+    if not interaction:
+        raise HTTPException(404, "Interaction not found")
+    return interaction
+
+
+@router.get("/{interaction_id}/follow-ups", response_model=list[FollowUpOut])
+async def get_follow_ups(interaction_id: str, db: AsyncSession = Depends(get_db)):
+    """All follow-ups linked to the interaction: AI suggestions and accepted/scheduled ones."""
+    await _interaction_or_404(db, interaction_id)
+    return await list_follow_ups(db, interaction_id)
+
+
+@router.post("/{interaction_id}/follow-ups/suggestions", response_model=list[FollowUpOut])
+async def create_follow_up_suggestions(interaction_id: str, db: AsyncSession = Depends(get_db)):
+    """Generate up to 3 AI follow-up suggestions (status "Suggested"), replacing unaccepted ones."""
+    interaction = await _interaction_or_404(db, interaction_id)
+    hcp = await db.get(HCP, interaction.hcp_id)
+    assert hcp is not None  # FK
+    try:
+        return await suggest_follow_ups(db, interaction, hcp)
+    except Exception as exc:  # LLM/network failure: report, don't 500 with a traceback
+        await db.rollback()
+        raise HTTPException(502, f"Could not generate follow-up suggestions: {type(exc).__name__}") from exc

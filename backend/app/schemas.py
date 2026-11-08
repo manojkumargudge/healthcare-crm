@@ -1,8 +1,11 @@
 from datetime import date, datetime
-from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from typing import Annotated, Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from app.catalog import Sentiment, clean_names
 from app.samples import SampleDrop
+
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 
 class HCPBase(BaseModel):
@@ -34,7 +37,16 @@ class InteractionCreate(BaseModel):
     samples_dropped: list[SampleDrop] = []
     materials_shared: list[str] = []
     key_topics: list[str] = []
+    attendees: list[Name] = Field(default=[], max_length=50)
+    # Set by the rep in the form; the form path never calls the LLM, so the
+    # stored label is exactly this and sentiment_score stays null.
+    hcp_sentiment: Optional[Sentiment] = None
     raw_notes: Optional[str] = None
+
+    @field_validator("attendees")
+    @classmethod
+    def _dedupe_attendees(cls, v: list[str]) -> list[str]:
+        return clean_names(v)
 
 
 class InteractionUpdate(BaseModel):
@@ -43,8 +55,9 @@ class InteractionUpdate(BaseModel):
     samples_dropped: Optional[list[SampleDrop]] = None
     materials_shared: Optional[list[str]] = None
     key_topics: Optional[list[str]] = None
+    attendees: Optional[list[Name]] = Field(default=None, max_length=50)
     raw_notes: Optional[str] = None
-    hcp_sentiment: Optional[str] = None
+    hcp_sentiment: Optional[Sentiment] = None  # manual label: clears the LLM sentiment_score
     edited_by: Optional[str] = "field_rep"
     edit_reason: Optional[str] = None
 
@@ -60,6 +73,7 @@ class InteractionOut(BaseModel):
     samples_dropped: list
     materials_shared: list
     key_topics: list
+    attendees: list = []
     hcp_sentiment: Optional[str] = None
     sentiment_score: Optional[float] = None
     raw_notes: Optional[str] = None
@@ -70,6 +84,36 @@ class InteractionOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     edit_history: list
+
+    @field_validator("attendees", mode="before")
+    @classmethod
+    def _none_to_empty(cls, v: object) -> object:
+        return [] if v is None else v  # rows created before the attendees column existed
+
+
+class MaterialCreate(BaseModel):
+    name: Name
+
+
+class MaterialOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+
+
+class FollowUpOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    hcp_id: str
+    interaction_id: Optional[str] = None
+    due_date: date
+    reason: str
+    status: str
+    created_at: datetime
+
+
+class FollowUpStatusUpdate(BaseModel):
+    status: Literal["Pending", "Dismissed", "Done", "Cancelled"]
 
 
 class ChatTurnRequest(BaseModel):

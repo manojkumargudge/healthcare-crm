@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -10,8 +10,13 @@ router = APIRouter(prefix="/api/hcps", tags=["HCPs"])
 
 
 @router.get("", response_model=list[HCPOut])
-async def list_hcps(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(HCP).order_by(HCP.name))
+async def list_hcps(q: str = Query("", max_length=200), db: AsyncSession = Depends(get_db)):
+    """All HCPs by name; with `q`, a case-insensitive search over name, specialty and institution."""
+    stmt = select(HCP).order_by(HCP.name)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(HCP.name.ilike(like), HCP.specialty.ilike(like), HCP.institution.ilike(like)))
+    result = await db.execute(stmt)
     return result.scalars().all()
 
 

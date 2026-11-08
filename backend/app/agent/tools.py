@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import HCP, Interaction, FollowUp, utcnow
 from app.agent.llm import ainvoke_resilient
 from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
+from app.catalog import normalize_sentiment, resolve_attendees, resolve_materials
 
 __all__ = ["STATE_SAMPLE_LIMITS", "build_tools", "apply_compliance"]
 
@@ -82,8 +83,20 @@ def build_tools(db: AsyncSession) -> list[StructuredTool]:
         hcp_id: str = Field(description="ID of the HCP this interaction is with")
         raw_text: str = Field(description="Free-text notes or chat transcript describing what happened in the interaction")
         interaction_type: str = Field(default="Visit", description="One of Visit, Call, Email, Sample Drop, Conference")
+        attendees: Optional[list[str]] = Field(
+            default=None, description="Names of other people present (colleagues, other HCPs), if the rep mentioned any"
+        )
+        materials_shared: Optional[list[str]] = Field(
+            default=None, description="Materials/leave-behinds the rep shared, if mentioned"
+        )
 
-    async def log_interaction(hcp_id: str, raw_text: str, interaction_type: str = "Visit") -> str:
+    async def log_interaction(
+        hcp_id: str,
+        raw_text: str,
+        interaction_type: str = "Visit",
+        attendees: Optional[list[str]] = None,
+        materials_shared: Optional[list[str]] = None,
+    ) -> str:
         hcp = await db.get(HCP, hcp_id)
         if not hcp:
             return json.dumps({"error": f"No HCP found with id {hcp_id}"})
@@ -97,6 +110,7 @@ Extract structured data and return ONLY valid JSON, no prose, no markdown fences
   "samples_dropped": [{{"product": "name", "qty": integer}}],
   "materials_shared": ["list of any leave-behinds, brochures, studies mentioned"],
   "key_topics": ["short topic tags, e.g. 'efficacy data', 'side effects', 'pricing'"],
+  "attendees": ["names of other people present besides the rep and Dr. {hcp.name}"],
   "hcp_sentiment": "Positive | Neutral | Negative",
   "sentiment_score": float between -1.0 and 1.0
 }}
@@ -105,6 +119,15 @@ Notes:
 \"\"\"{raw_text}\"\"\""""
         response, _model_used = await ainvoke_resilient(extraction_prompt, temperature=0.1, fast=True)
         data = _extract_json(response.content)
+        try:
+            sentiment = normalize_sentiment(data.get("hcp_sentiment"))
+        except ValueError:
+            sentiment = None
+        # Explicit tool arguments first, then anything the extraction found.
+        attendee_names = await resolve_attendees(db, list(attendees or []) + list(data.get("attendees") or []))
+        material_names = await resolve_materials(
+            db, list(materials_shared or []) + list(data.get("materials_shared") or [])
+        )
 
         interaction = Interaction(
             hcp_id=hcp_id,
@@ -113,10 +136,11 @@ Notes:
             interaction_date=date.today(),
             products_discussed=data.get("products_discussed", []),
             samples_dropped=coerce_samples(data.get("samples_dropped", []), source="log_interaction"),
-            materials_shared=data.get("materials_shared", []),
+            materials_shared=material_names,
             key_topics=data.get("key_topics", []),
-            hcp_sentiment=data.get("hcp_sentiment"),
-            sentiment_score=data.get("sentiment_score"),
+            attendees=attendee_names,
+            hcp_sentiment=sentiment,
+            sentiment_score=data.get("sentiment_score") if sentiment else None,
             raw_notes=raw_text,
             ai_summary=data.get("summary"),
         )
@@ -130,13 +154,19 @@ Notes:
             "summary": interaction.ai_summary,
             "products_discussed": interaction.products_discussed,
             "samples_dropped": interaction.samples_dropped,
+            "materials_shared": interaction.materials_shared,
+            "attendees": interaction.attendees,
             "hcp_sentiment": interaction.hcp_sentiment,
         })
 
     # ---- 2. EDIT INTERACTION -------------------------------------------------
     class EditInteractionArgs(BaseModel):
         interaction_id: str = Field(description="ID of the interaction to edit")
-        updates: str = Field(description="JSON string of fields to update, e.g. '{\"hcp_sentiment\": \"Positive\"}'")
+        updates: str = Field(
+            description="JSON string of fields to update, e.g. '{\"hcp_sentiment\": \"Positive\"}'. Editable: "
+            "interaction_type, products_discussed, samples_dropped, materials_shared, key_topics, raw_notes, "
+            "hcp_sentiment (Positive/Neutral/Negative), attendees (list of names)"
+        )
         edit_reason: Optional[str] = Field(default=None, description="Why this edit is being made")
 
     async def edit_interaction(interaction_id: str, updates: str, edit_reason: Optional[str] = None) -> str:
@@ -151,10 +181,20 @@ Notes:
 
         allowed_fields = {
             "interaction_type", "products_discussed", "samples_dropped",
-            "materials_shared", "key_topics", "raw_notes", "hcp_sentiment",
+            "materials_shared", "key_topics", "raw_notes", "hcp_sentiment", "attendees",
         }
         if "samples_dropped" in update_dict:
             update_dict["samples_dropped"] = coerce_samples(update_dict["samples_dropped"], source="edit_interaction")
+        if "attendees" in update_dict:
+            update_dict["attendees"] = await resolve_attendees(db, update_dict["attendees"])
+        if "materials_shared" in update_dict:
+            update_dict["materials_shared"] = await resolve_materials(db, update_dict["materials_shared"])
+        if "hcp_sentiment" in update_dict:
+            try:
+                update_dict["hcp_sentiment"] = normalize_sentiment(update_dict["hcp_sentiment"])
+            except ValueError as exc:
+                await db.rollback()
+                return json.dumps({"error": str(exc)})
 
         before = {}
         changed = {}
@@ -234,6 +274,7 @@ Notes:
                     "type": i.interaction_type,
                     "summary": i.ai_summary,
                     "products_discussed": i.products_discussed,
+                    "attendees": i.attendees or [],
                     "sentiment": i.hcp_sentiment,
                 } for i in recent
             ],

@@ -19,4 +19,10 @@ export const api = {
   createInteraction: (data) => request('/api/interactions', { method: 'POST', body: JSON.stringify(data) }),
   updateInteraction: (id, data) => request(`/api/interactions/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   chatTurn: (data) => request('/api/chat/turn', { method: 'POST', body: JSON.stringify(data) }),
+  searchHcps: (q) => request(`/api/hcps?q=${encodeURIComponent(q || '')}`),
+  searchMaterials: (q) => request(`/api/materials?q=${encodeURIComponent(q || '')}`),
+  createMaterial: (name) => request('/api/materials', { method: 'POST', body: JSON.stringify({ name }) }),
+  listFollowUps: (interactionId) => request(`/api/interactions/${interactionId}/follow-ups`),
+  suggestFollowUps: (interactionId) => request(`/api/interactions/${interactionId}/follow-ups/suggestions`, { method: 'POST' }),
+  updateFollowUp: (id, data) => request(`/api/follow-ups/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 }
