@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import demo_seed
@@ -27,7 +27,7 @@ def seeded_env(monkeypatch: pytest.MonkeyPatch, db: AsyncSession) -> None:
         monkeypatch.setattr(demo_seed.settings, attr, PASSWORD)
 
 
-async def _count(db: AsyncSession, model: type, *where: object) -> int:
+async def _count(db: AsyncSession, model: type, *where: ColumnElement[bool]) -> int:
     return (await db.execute(select(func.count()).select_from(model).where(*where))).scalar_one()
 
 
