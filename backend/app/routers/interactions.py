@@ -5,7 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.catalog import resolve_attendees, resolve_materials
+from app.catalog import canonical_samples, resolve_attendees, resolve_materials, resolve_products
+from app.models import utcnow
 from app.follow_ups import list_follow_ups, suggest_follow_ups
 from app.models import Interaction
 from app.schemas import FollowUpOut, InteractionCreate, InteractionUpdate, InteractionOut
@@ -38,6 +39,10 @@ async def create_interaction(payload: InteractionCreate, db: AsyncSession = Depe
         data["interaction_date"] = date_cls.today()
     data["attendees"] = await resolve_attendees(db, data["attendees"])
     data["materials_shared"] = await resolve_materials(db, data["materials_shared"])
+    data["products_discussed"] = await resolve_products(db, data["products_discussed"])
+    data["samples_dropped"] = await canonical_samples(db, data["samples_dropped"])
+    if data["voice_note_consent"] and data["voice_note_consent_at"] is None:
+        data["voice_note_consent_at"] = utcnow()
     # Form-set sentiment label is authoritative; there is no LLM score for it.
     interaction = Interaction(**data, sentiment_score=None)
 

@@ -168,6 +168,13 @@ export default function InteractionHistory() {
 
               )}
 
+              {item.voice_note_consent && (
+                <p style={{ marginTop: 8 }} className="voice-consent-note">
+                  🎙 Voice note: HCP consent recorded
+                  {item.voice_note_consent_at ? ` ${new Date(item.voice_note_consent_at).toLocaleString()}` : ""}
+                </p>
+              )}
+
               {item.attendees?.length > 0 && (
                 <p style={{ marginTop: 8 }}>
                   <strong>Attendees:</strong> {item.attendees.join(", ")}

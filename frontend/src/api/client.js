@@ -22,6 +22,22 @@ export const api = {
   searchHcps: (q) => request(`/api/hcps?q=${encodeURIComponent(q || '')}`),
   searchMaterials: (q) => request(`/api/materials?q=${encodeURIComponent(q || '')}`),
   createMaterial: (name) => request('/api/materials', { method: 'POST', body: JSON.stringify({ name }) }),
+  searchProducts: (q) => request(`/api/products?q=${encodeURIComponent(q || '')}`),
+  createProduct: (name) => request('/api/products', { method: 'POST', body: JSON.stringify({ name }) }),
+  // Raw audio body (no multipart): the server keeps it in memory only and never stores it.
+  summarizeVoiceNote: async (blob) => {
+    const res = await fetch(`${BASE_URL}/api/voice-notes/summarize?consent=true`, {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'audio/webm' },
+      body: blob,
+    })
+    if (!res.ok) {
+      let detail = await res.text()
+      try { detail = JSON.parse(detail).detail || detail } catch { /* plain text */ }
+      throw new Error(`API ${res.status}: ${detail}`)
+    }
+    return res.json()
+  },
   listFollowUps: (interactionId) => request(`/api/interactions/${interactionId}/follow-ups`),
   suggestFollowUps: (interactionId) => request(`/api/interactions/${interactionId}/follow-ups/suggestions`, { method: 'POST' }),
   updateFollowUp: (id, data) => request(`/api/follow-ups/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),

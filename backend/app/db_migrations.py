@@ -31,7 +31,10 @@ from app.database import Base
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 
 # Functional indexes are invisible to alembic's autogenerate, so they are checked by name.
-EXPECTED_EXPRESSION_INDEXES = {("materials", "uq_materials_name_lower"): "lower((name)::text)"}
+EXPECTED_EXPRESSION_INDEXES = {
+    ("materials", "uq_materials_name_lower"): "lower((name)::text)",
+    ("products", "uq_products_name_lower"): "lower((name)::text)",
+}
 
 
 def migration_files() -> list[Path]:

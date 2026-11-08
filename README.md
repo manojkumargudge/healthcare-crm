@@ -11,7 +11,7 @@ Both paths write to the same tables and apply the same sample validation and com
 
 This is a working prototype. There is no authentication; see [Security notes](#security-notes).
 
-The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](docs/brief-mockup.png)); see [`docs/screenshots/form-vs-mockup.png`](docs/screenshots/form-vs-mockup.png) for a side-by-side. Not built yet: the mockup's "Summarize from Voice Note (Requires Consent)" button (planned).
+The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](docs/brief-mockup.png)); see [`docs/screenshots/form-vs-mockup.png`](docs/screenshots/form-vs-mockup.png) for a side-by-side. The mockup's "Summarize from Voice Note (Requires Consent)" button is built: see [Voice notes](#voice-notes) and [`docs/screenshots/voice-3-summary-in-topics.png`](docs/screenshots/voice-3-summary-in-topics.png).
 
 ## Architecture
 
@@ -72,6 +72,9 @@ The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](d
 | POST | `/api/materials` | Add a material to the catalog as **pending approval** (returns the existing one if the name already exists, case-insensitive) |
 | POST | `/api/chat/turn` | One chat turn: reply, tools called, any interaction logged |
 | GET | `/api/chat/{session_id}/history` | Stored messages for a chat session |
+| GET | `/api/products?q=` | Search the product catalog (Products Discussed and sample products) |
+| POST | `/api/products` | Add a product (returns the existing one if the name already exists, case-insensitive) |
+| POST | `/api/voice-notes/summarize?consent=true` | Raw audio body (webm/ogg/wav/mp3/m4a/flac, max 10 MB) → transcript + "Topics Discussed" summary. Nothing is stored |
 | GET | `/health` | Liveness check |
 
 Interactive API docs: `http://127.0.0.1:8000/docs`.
@@ -169,6 +172,21 @@ RUN_LIVE_GROQ=1 LIVE_GROQ_API_KEY=<your key> pytest -m live -v   # same TEST_DAT
 - **Backend:** ruff, mypy, and pytest against a Postgres 16 service.
 - **Frontend:** `npm ci`, `npm run build`, and Vitest.
 
+## Voice notes
+
+In the form, **Summarize from Voice Note (Requires Consent)** opens a small panel. Recording stays disabled until the rep ticks *"The HCP consented to this conversation being recorded and transcribed."*
+
+How it works:
+- The browser records with `MediaRecorder`, for up to 3 minutes.
+- It sends the audio once to `POST /api/voice-notes/summarize?consent=true`.
+- The backend transcribes it with Groq Whisper (`GROQ_TRANSCRIBE_MODEL`, default `whisper-large-v3-turbo`; `whisper-large-v3` is the more accurate option). It then summarizes the transcript with `GROQ_MODEL_FAST`.
+- The summary is added to **Topics Discussed**.
+
+Privacy and limits:
+- **Consent:** the endpoint refuses audio without consent. The saved interaction records `voice_note_consent` and the server's `voice_note_consent_at`.
+- **Audio is never stored.** The request body is read into memory (no multipart parsing, so no temporary files), sent to Groq, and dropped. The transcript is shown to the rep but not saved, and neither is logged.
+- **Limits:** 10 MB, and only real audio of the declared type is accepted (webm, ogg, wav, mp3, m4a, flac). Wrong types return 415, oversized uploads 413, recordings with no speech 422, and Groq failures 502.
+
 ## Migrations
 
 There is no Alembic yet. Schema changes are hand-written, idempotent SQL files in `backend/migrations/`, applied in file-name order. `000_baseline.sql` recreates the app's original schema, so running every file on an **empty** database produces exactly the schema in `app/models.py`. CI checks this on every run and fails on any drift, and the test suite runs on that migrated schema. The backend still calls `create_all` at startup, which creates the same schema for a brand-new database.
@@ -181,6 +199,7 @@ There is no Alembic yet. Schema changes are hand-written, idempotent SQL files i
 | `003_attendees_materials.sql` | Adds `interactions.attendees` and the `materials` catalog table, and copies existing free-text materials into the catalog. |
 | `004_materials_approval.sql` | Adds `materials.approved`. Materials that existed when the column was added (starter catalog and migrated tags) are approved; materials added afterwards start as pending. Also makes `attendees` and `materials.created_at` NOT NULL. |
 | `005_interaction_time_outcomes.sql` | Adds `interaction_time`, `outcomes` and `follow_up_actions` to interactions (fields from the brief's form). |
+| `006_products_voice_consent.sql` | Adds the `products` catalog (backfilled from existing products and sample names) and `voice_note_consent` / `voice_note_consent_at` on interactions. |
 
 Every file is safe to run more than once. Back up first, then apply all of them:
 

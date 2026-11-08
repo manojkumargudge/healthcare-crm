@@ -6,6 +6,7 @@ import { api } from '../api/client'
 import { SENTIMENTS } from '../lib/format'
 import SearchableMultiSelect from './SearchableMultiSelect'
 import FollowUpSuggestions from './FollowUpSuggestions'
+import VoiceNoteRecorder from './VoiceNoteRecorder'
 
 // Layout and labels follow docs/brief-mockup.png ("Interaction Details").
 const INTERACTION_TYPES = ['Meeting', 'Visit', 'Call', 'Email', 'Sample Drop', 'Conference']
@@ -78,6 +79,9 @@ export default function StructuredForm() {
   const [time, setTime] = useState(nowHHMM())
   const [attendees, setAttendees] = useState([])
   const [topics, setTopics] = useState('')
+  const [products, setProducts] = useState([])
+  const [productOptions, setProductOptions] = useState([])
+  const [voiceConsentAt, setVoiceConsentAt] = useState(null)
   const [materials, setMaterials] = useState([])
   const [pendingMaterials, setPendingMaterials] = useState(() => new Set())
   const [showMaterialPicker, setShowMaterialPicker] = useState(false)
@@ -99,6 +103,16 @@ export default function StructuredForm() {
     return { value: m.name, badge: m.approved ? undefined : PENDING }
   }, [])
   const searchMaterials = useCallback(async (q) => (await api.searchMaterials(q)).map(toOption), [toOption])
+  // One product catalog for "Products Discussed" and sample product names.
+  const searchProducts = useCallback(async (q) => (await api.searchProducts(q)).map((p) => p.name), [])
+  const createProduct = useCallback(async (name) => (await api.createProduct(name)).name, [])
+  const refreshProductOptions = useCallback(async (q) => {
+    try { setProductOptions(await searchProducts(q)) } catch { setProductOptions([]) }
+  }, [searchProducts])
+  const onVoiceSummary = useCallback((summary, { consentAt }) => {
+    setTopics((prev) => (prev.trim() ? `${prev.trim()}\n\n${summary}` : summary))
+    setVoiceConsentAt(consentAt)
+  }, [])
   const createMaterial = useCallback(async (name) => toOption(await api.createMaterial(name)), [toOption])
 
   const addSample = () => {
@@ -125,11 +139,15 @@ export default function StructuredForm() {
         // Rep's own label is authoritative; the backend stores no AI score for it.
         hcp_sentiment: sentiment || null,
         raw_notes: topics,
+        products_discussed: products,
+        voice_note_consent: Boolean(voiceConsentAt),
+        voice_note_consent_at: voiceConsentAt,
         outcomes: outcomes || null,
         follow_up_actions: followUpActions || null,
       })).unwrap()
       setResult(res)
-      setAttendees([]); setTopics(''); setMaterials([]); setSamples([]); setSentiment('')
+      setAttendees([]); setTopics(''); setProducts([]); setMaterials([]); setSamples([]); setSentiment('')
+      setVoiceConsentAt(null)
       setOutcomes(''); setFollowUpActions(''); setShowMaterialPicker(false); setShowSampleForm(false)
       setTime(nowHHMM())
     } catch (err) {
@@ -187,7 +205,23 @@ export default function StructuredForm() {
             value={topics}
             onChange={(e) => setTopics(e.target.value)}
           />
-          {/* "Summarize from Voice Note (Requires Consent)" from the mockup: planned for the next PR. */}
+          <VoiceNoteRecorder onSummary={onVoiceSummary} />
+          {voiceConsentAt && (
+            <p className="voice-consent-note">Voice note consent recorded {new Date(voiceConsentAt).toLocaleString()}.</p>
+          )}
+        </div>
+
+        <div className="field">
+          <label className="field-label" htmlFor="products">Products Discussed</label>
+          <SearchableMultiSelect
+            id="products"
+            values={products}
+            onChange={setProducts}
+            search={searchProducts}
+            onCreate={createProduct}
+            placeholder="Search products or add a new one"
+            createLabel={(q) => `Add "${q}" to products`}
+          />
         </div>
 
         <fieldset className="field group-box">
@@ -236,10 +270,15 @@ export default function StructuredForm() {
               <div className="sample-form">
                 <input
                   type="text" placeholder="Product name" aria-label="Sample product"
+                  list="sample-product-options"
                   value={sampleDraft.product}
-                  onChange={(e) => setSampleDraft({ ...sampleDraft, product: e.target.value })}
+                  onFocus={() => refreshProductOptions(sampleDraft.product)}
+                  onChange={(e) => { setSampleDraft({ ...sampleDraft, product: e.target.value }); refreshProductOptions(e.target.value) }}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSample() } }}
                 />
+                <datalist id="sample-product-options">
+                  {productOptions.map((name) => <option key={name} value={name} />)}
+                </datalist>
                 <input
                   type="number" min="1" placeholder="Qty" aria-label="Sample quantity"
                   value={sampleDraft.qty}

@@ -58,6 +58,9 @@ class Interaction(Base):
     next_best_action: Mapped[str] = mapped_column(Text, nullable=True)
     outcomes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # "Outcomes" in the form
     follow_up_actions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # free-text next steps
+    # The HCP consented to a voice note being recorded and transcribed. Audio is never stored.
+    voice_note_consent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
+    voice_note_consent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     compliance_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     compliance_notes: Mapped[str] = mapped_column(Text, nullable=True)
@@ -113,3 +116,15 @@ class Material(Base):
 
 # Case-insensitive uniqueness on the real column (matches migration 003).
 Index("uq_materials_name_lower", func.lower(Material.name), unique=True)
+
+
+class Product(Base):
+    """Product catalog shared by "Products Discussed" and sample products."""
+    __tablename__ = "products"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+Index("uq_products_name_lower", func.lower(Product.name), unique=True)

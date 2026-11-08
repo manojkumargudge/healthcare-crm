@@ -162,7 +162,7 @@ async def test_schema_uses_timestamptz(db: AsyncSession) -> None:
             )
         )
     ).all()
-    assert len(rows) == 6  # 5 original + materials.created_at
+    assert len(rows) == 7  # 5 original + materials.created_at + products.created_at
     assert {r.data_type for r in rows} == {"timestamp with time zone"}
 
 

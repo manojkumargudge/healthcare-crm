@@ -91,6 +91,11 @@ def _block_real_groq(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(ChatGroq, "invoke", _refuse_sync)
     monkeypatch.setattr(ChatGroq, "_agenerate", _refuse)
     monkeypatch.setattr(ChatGroq, "_generate", _refuse_sync)
+    # Audio (Whisper) goes through the Groq SDK directly, not ChatGroq.
+    from groq.resources.audio.transcriptions import AsyncTranscriptions, Transcriptions
+
+    monkeypatch.setattr(AsyncTranscriptions, "create", _refuse)
+    monkeypatch.setattr(Transcriptions, "create", _refuse_sync)
 
 
 class FakeLLM:
@@ -120,6 +125,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr("app.agent.tools.ainvoke_resilient", fake)
         monkeypatch.setattr("app.agent.graph.ainvoke_resilient", fake)
         monkeypatch.setattr("app.follow_ups.ainvoke_resilient", fake)
+        monkeypatch.setattr("app.voice_notes.ainvoke_resilient", fake)
         return fake
 
     return _install

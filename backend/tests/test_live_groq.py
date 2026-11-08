@@ -183,3 +183,20 @@ async def test_live_follow_up_suggestions(client: httpx.AsyncClient, hcp: dict) 
     rows = resp.json()
     assert 1 <= len(rows) <= 3, rows
     assert all(r["status"] == "Suggested" and len(r["reason"]) >= 3 for r in rows), rows
+
+
+async def test_live_voice_note_transcribe_and_summarize(client: httpx.AsyncClient) -> None:
+    """Real Groq Whisper + fast model on a synthetic (Windows SAPI) speech recording."""
+    from pathlib import Path
+
+    wav = (Path(__file__).parent / "fixtures" / "voice_note_sample.wav").read_bytes()
+    resp = await client.post(
+        "/api/voice-notes/summarize", params={"consent": "true"}, content=wav,
+        headers={"content-type": "audio/wav"}, timeout=120,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    transcript, summary = body["transcript"].lower(), body["summary"].lower()
+    assert "rao" in transcript and "pricing" in transcript, body["transcript"]
+    assert summary and ("cardio" in summary or "pricing" in summary), body["summary"]
+    assert body["transcription_model"] == "whisper-large-v3-turbo"

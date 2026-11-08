@@ -36,7 +36,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import HCP, Interaction, FollowUp, utcnow
 from app.agent.llm import ainvoke_resilient
 from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
-from app.catalog import display_name, normalize_sentiment, resolve_attendees, resolve_materials, unapproved_materials
+from app.catalog import (
+    canonical_samples,
+    display_name,
+    normalize_sentiment,
+    resolve_attendees,
+    resolve_materials,
+    resolve_products,
+    unapproved_materials,
+)
 
 __all__ = ["STATE_SAMPLE_LIMITS", "build_tools", "apply_compliance"]
 
@@ -141,14 +149,18 @@ Notes:
         material_names = await resolve_materials(
             db, list(materials_shared or []) + list(data.get("materials_shared") or [])
         )
+        product_names = await resolve_products(db, data.get("products_discussed") or [])
+        samples = await canonical_samples(
+            db, coerce_samples(data.get("samples_dropped", []), source="log_interaction")
+        )
 
         interaction = Interaction(
             hcp_id=hcp_id,
             interaction_type=interaction_type,
             channel="chat",
             interaction_date=date.today(),
-            products_discussed=data.get("products_discussed", []),
-            samples_dropped=coerce_samples(data.get("samples_dropped", []), source="log_interaction"),
+            products_discussed=product_names,
+            samples_dropped=samples,
             materials_shared=material_names,
             key_topics=data.get("key_topics", []),
             attendees=attendee_names,
@@ -203,7 +215,11 @@ Notes:
             "outcomes", "follow_up_actions",
         }
         if "samples_dropped" in update_dict:
-            update_dict["samples_dropped"] = coerce_samples(update_dict["samples_dropped"], source="edit_interaction")
+            update_dict["samples_dropped"] = await canonical_samples(
+                db, coerce_samples(update_dict["samples_dropped"], source="edit_interaction")
+            )
+        if "products_discussed" in update_dict:
+            update_dict["products_discussed"] = await resolve_products(db, update_dict["products_discussed"])
         if "attendees" in update_dict:
             update_dict["attendees"] = await resolve_attendees(db, update_dict["attendees"])
         if "materials_shared" in update_dict:
