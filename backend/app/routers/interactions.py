@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from datetime import date as date_cls
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,11 +17,24 @@ from app.catalog import (
 )
 from app.database import get_db
 from app.follow_ups import list_follow_ups, suggest_follow_ups
-from app.models import HCP, Interaction, utcnow
+from app.models import HCP, Interaction, User, utcnow
 from app.ratelimit import llm_rate_limit
 from app.schemas import FollowUpOut, InteractionCreate, InteractionOut, InteractionUpdate
 
 router = APIRouter(prefix="/api/interactions", tags=["Interactions"])
+
+
+async def interactions_out(db: AsyncSession, interactions: Sequence[Interaction]) -> list[InteractionOut]:
+    """Serialize interactions with each owner's email (one query for all of them)."""
+    owner_ids = {i.owner_id for i in interactions}
+    emails: dict[str, str] = {}
+    if owner_ids:
+        rows = await db.execute(select(User.id, User.email).where(User.id.in_(owner_ids)))
+        emails = {uid: email for uid, email in rows.all()}
+    return [
+        InteractionOut.model_validate(i).model_copy(update={"owner_email": emails.get(i.owner_id)})
+        for i in interactions
+    ]
 
 
 @router.get("", response_model=list[InteractionOut])
@@ -31,7 +45,7 @@ async def list_interactions(
     stmt = authz.read_filter(select(Interaction), Interaction).order_by(Interaction.interaction_date.desc())
     if hcp_id:
         stmt = stmt.where(Interaction.hcp_id == hcp_id)
-    return (await db.execute(stmt)).scalars().all()
+    return await interactions_out(db, (await db.execute(stmt)).scalars().all())
 
 
 @router.post("", response_model=InteractionOut, status_code=201)
@@ -64,7 +78,7 @@ async def create_interaction(
     db.add(interaction)
     await db.commit()
     await db.refresh(interaction)
-    return interaction
+    return (await interactions_out(db, [interaction]))[0]
 
 
 async def _visible(db: AsyncSession, authz: Authz, interaction_id: str) -> Interaction:
@@ -76,7 +90,7 @@ async def _visible(db: AsyncSession, authz: Authz, interaction_id: str) -> Inter
 
 @router.get("/{interaction_id}", response_model=InteractionOut)
 async def get_interaction(interaction_id: str, authz: Authz = Depends(get_authz), db: AsyncSession = Depends(get_db)):
-    return await _visible(db, authz, interaction_id)
+    return (await interactions_out(db, [await _visible(db, authz, interaction_id)]))[0]
 
 
 @router.patch("/{interaction_id}", response_model=InteractionOut)
@@ -103,7 +117,9 @@ async def update_interaction(
     result = json.loads(raw)
     if "error" in result:
         raise HTTPException(404, result["error"])
-    return await db.get(Interaction, interaction_id)
+    updated = await db.get(Interaction, interaction_id)
+    assert updated is not None  # the tool just edited it
+    return (await interactions_out(db, [updated]))[0]
 
 
 @router.get("/{interaction_id}/follow-ups", response_model=list[FollowUpOut])

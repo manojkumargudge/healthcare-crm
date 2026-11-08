@@ -13,6 +13,7 @@ export default function FollowUpSuggestions({ interactionId }) {
   const items = useSelector((s) => (interactionId ? s.followUps.byInteraction[interactionId] : null) || EMPTY)
   const status = useSelector((s) => s.followUps.status)
   const error = useSelector((s) => s.followUps.error)
+  const rateLimited = useSelector((s) => s.followUps.rateLimited)
 
   useEffect(() => {
     if (interactionId) dispatch(generateSuggestions(interactionId))
@@ -38,7 +39,9 @@ export default function FollowUpSuggestions({ interactionId }) {
       </div>
 
       {!interactionId && <p className="follow-ups-empty">Suggestions appear here after you log the interaction.</p>}
-      {interactionId && status === 'failed' && <p className="follow-ups-error">Couldn’t get suggestions: {error}</p>}
+      {interactionId && status === 'failed' && (
+        <p className="follow-ups-error" role="alert">{rateLimited ? error : `Couldn’t get suggestions: ${error}`}</p>
+      )}
       {interactionId && status !== 'failed' && error && <p className="follow-ups-error">{error}</p>}
       {interactionId && status !== 'loading' && status !== 'failed' && suggested.length === 0 && added.length === 0 && (
         <p className="follow-ups-empty">No suggestions for this interaction.</p>

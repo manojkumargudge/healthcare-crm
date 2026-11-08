@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.tools import apply_compliance
 from app.authz import Authz, require_role
+from app.config import settings
 from app.catalog import clean_names
 from app.database import get_db
 from app.models import HCP, Interaction, Material, Product, User, gen_uuid, utcnow
@@ -111,6 +112,15 @@ async def delete_product(product_id: str, _: Authz = Depends(admin_only), db: As
 
 
 # ------------------------------------------------------------------ users
+DEMO_READ_ONLY = "User management is read-only in demo mode (the demo accounts can't be changed)."
+
+
+def _users_writable() -> None:
+    """In DEMO_MODE nobody can add users or change role, active flag or password,
+    so the shared demo accounts stay usable for every visitor."""
+    if settings.demo_mode:
+        raise HTTPException(403, DEMO_READ_ONLY)
+
 @router.get("/reps", response_model=list[UserOut])
 async def list_users(_: Authz = Depends(admin_only), db: AsyncSession = Depends(get_db)):
     return (await db.execute(select(User).order_by(func.lower(User.email)))).scalars().all()
@@ -118,6 +128,7 @@ async def list_users(_: Authz = Depends(admin_only), db: AsyncSession = Depends(
 
 @router.post("/reps", response_model=UserOut, status_code=201)
 async def create_user(payload: UserCreate, _: Authz = Depends(admin_only), db: AsyncSession = Depends(get_db)):
+    _users_writable()
     exists = (await db.execute(select(User.id).where(func.lower(User.email) == payload.email.lower()))).first()
     if exists:
         raise HTTPException(409, "A rep with this email already exists")
@@ -138,6 +149,7 @@ async def update_user(
     user_id: str, payload: UserUpdate, _: Authz = Depends(admin_only), db: AsyncSession = Depends(get_db)
 ):
     """Change role, (de)activate, or reset password. The last active admin can't be demoted or deactivated."""
+    _users_writable()
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(404, "Rep not found")

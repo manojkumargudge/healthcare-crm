@@ -32,7 +32,7 @@ export const dismissFollowUp = createAsyncThunk('followUps/dismiss', async ({ id
 
 const followUpsSlice = createSlice({
   name: 'followUps',
-  initialState: { byInteraction: {}, inFlight: {}, status: 'idle', error: null },
+  initialState: { byInteraction: {}, inFlight: {}, status: 'idle', error: null, rateLimited: false },
   reducers: {},
   extraReducers: (builder) => {
     const replace = (state, action) => {
@@ -53,6 +53,7 @@ const followUpsSlice = createSlice({
       .addCase(generateSuggestions.pending, (state, action) => {
         state.status = 'loading'
         state.error = null
+        state.rateLimited = false
         state.inFlight[action.meta.arg] = true
       })
       .addCase(generateSuggestions.fulfilled, (state, action) => {
@@ -63,6 +64,7 @@ const followUpsSlice = createSlice({
         delete state.inFlight[action.meta.arg]
         state.status = 'failed'
         state.error = action.error.message
+        state.rateLimited = action.error.name === 'RateLimitError'
       })
       .addCase(acceptFollowUp.fulfilled, upsert)
       .addCase(acceptFollowUp.rejected, (state, action) => {

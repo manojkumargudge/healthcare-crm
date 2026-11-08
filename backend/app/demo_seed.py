@@ -39,7 +39,7 @@ DEMO_USERS: tuple[tuple[str, str, str], ...] = (
 DEMO_ADMIN_EMAIL = "demo-admin@example.com"
 
 # Every app table, children first. TRUNCATE ... CASCADE also covers any table added later
-# that references these.
+# that references these. llm_usage is deliberately kept: the daily AI cap survives a reset.
 APP_TABLES = ("chat_messages", "follow_ups", "interactions", "hcps", "materials", "products", "users")
 
 DEMO_HCPS: tuple[dict[str, str], ...] = (

@@ -52,6 +52,13 @@ class Settings(BaseSettings):
 
     # Per-rep budget for the LLM endpoints (chat, follow-up suggestions, voice notes).
     rate_limit_llm_per_minute: int = Field(default=20, ge=1)
+    # Global budget: AI requests per UTC day across all users and all three endpoints
+    # (counted in the database, so restarts don't reset it). 0 disables the cap.
+    llm_daily_cap: int = Field(default=500, ge=0)
+
+    # Public demo: user management is read-only (so the demo accounts can't be
+    # deactivated, re-roled or have their passwords changed) and the UI shows a banner.
+    demo_mode: bool = False
     backend_port: int = 8000  # compose-only (host port); declared so .env stays strict
 
     # Demo accounts created by `python -m app.demo_seed` (demo-rep / demo-manager / demo-admin).

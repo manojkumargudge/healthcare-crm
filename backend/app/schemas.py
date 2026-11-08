@@ -101,11 +101,18 @@ class InteractionOut(BaseModel):
     unmatched_products: list = []
     product_matches: list = []
     owner_id: str
+    owner_email: Optional[str] = None  # the rep who logged it (filled by interactions_out)
     compliance_flag: bool
     compliance_notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     edit_history: list
+
+
+class AppMeta(BaseModel):
+    """Public, non-secret settings the UI needs before sign-in."""
+    demo_mode: bool
+    llm_daily_cap: int
 
 
 class MaterialCreate(BaseModel):

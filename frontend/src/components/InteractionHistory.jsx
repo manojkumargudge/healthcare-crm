@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { editInteraction } from "../store/interactionsSlice";
 import { formatScore, sentimentClass, withOriginal } from "../lib/format";
@@ -13,6 +13,17 @@ export default function InteractionHistory() {
   const [editingId, setEditingId] = useState(null);
   const [draftNotes, setDraftNotes] = useState("");
   const [editError, setEditError] = useState("");
+  const [repFilter, setRepFilter] = useState("");
+
+  // Managers and admins see everyone's interactions, so show whose each one is and
+  // let them filter by rep. Reps only ever see their own rows.
+  const seesAllReps = user?.role === "manager" || user?.role === "admin";
+  const reps = useMemo(
+    () => [...new Set(items.map((i) => i.owner_email).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [items]
+  );
+  const activeFilter = seesAllReps && reps.includes(repFilter) ? repFilter : "";
+  const visible = activeFilter ? items.filter((i) => i.owner_email === activeFilter) : items;
 
   // Same rule as the API: admins edit anything; everyone else only their own rows
   // (managers can read other reps' interactions but not change them).
@@ -56,7 +67,21 @@ export default function InteractionHistory() {
   return (
     <div className="history-card">
 
-      {items.map((item) => (
+      {seesAllReps && (
+        <div className="history-filter">
+          <label htmlFor="rep-filter">Rep</label>
+          <select id="rep-filter" value={activeFilter} onChange={(e) => setRepFilter(e.target.value)}>
+            <option value="">All reps ({items.length})</option>
+            {reps.map((email) => (
+              <option key={email} value={email}>
+                {email} ({items.filter((i) => i.owner_email === email).length})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {visible.map((item) => (
 
         <div
           className="history-item"
@@ -78,6 +103,10 @@ export default function InteractionHistory() {
                 {item.interaction_date}
 
               </div>
+
+              {seesAllReps && (
+                <div className="history-rep">Rep: {item.owner_email || "unknown"}</div>
+              )}
 
             </div>
 

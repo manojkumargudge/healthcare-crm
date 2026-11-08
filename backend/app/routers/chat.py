@@ -6,10 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import ChatMessage, Interaction
-from app.schemas import ChatTurnRequest, ChatTurnResponse, InteractionOut
+from app.schemas import ChatTurnRequest, ChatTurnResponse
 from app.agent.graph import build_agent_graph
 from app.authz import Authz, get_authz
 from app.ratelimit import llm_rate_limit
+from app.routers.interactions import interactions_out
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
@@ -124,7 +125,7 @@ IMPORTANT:
     if logged_interaction_id:
         interaction = await db.get(Interaction, logged_interaction_id)
         if interaction and authz.can_read(interaction):
-            interaction_out = InteractionOut.model_validate(interaction)
+            interaction_out = (await interactions_out(db, [interaction]))[0]
 
     return ChatTurnResponse(
         session_id=payload.session_id,

@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 from datetime import datetime, date, time, timezone
-from sqlalchemy import CheckConstraint, text, String, Text, Date, DateTime, Time, ForeignKey, JSON, Float, Boolean, Index, false, func
+from sqlalchemy import CheckConstraint, text, String, Text, Date, DateTime, Time, ForeignKey, JSON, Float, Boolean, Index, Integer, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -151,3 +151,11 @@ Index("uq_products_name_lower", func.lower(Product.name), unique=True)
 
 
 Index("uq_users_email_lower", func.lower(User.email), unique=True)
+
+
+class LlmUsage(Base):
+    """AI requests per UTC day across all users (the LLM_DAILY_CAP counter)."""
+    __tablename__ = "llm_usage"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
