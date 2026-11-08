@@ -88,7 +88,7 @@ curl http://127.0.0.1:8000/health      # {"status":"healthy"}
 
 ### Backend
 
-Needs Python 3.11 and a PostgreSQL 16 server you can reach. That can be a local install, or the Compose Postgres from the Quickstart (`docker compose up -d postgres`).
+Needs Python 3.11 and a PostgreSQL 16 server you can reach. That can be a local install, or the Compose Postgres from the Quickstart (`docker compose up -d postgres`). If the Compose backend is also running, stop it first (`docker compose stop backend`), because it already uses port 8000.
 
 ```bash
 cd backend
