@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { fetchHcps, selectHcp } from "../store/hcpSlice";
+import { hcpDisplayName } from "../lib/format";
 
 export default function Sidebar() {
   const dispatch = useDispatch();
@@ -50,7 +51,7 @@ export default function Sidebar() {
             <div className="hcp-content">
 
               <h3 className="hcp-name">
-                Dr. {hcp.name.replace(/^Dr\.?\s*/i, "")}
+                {hcpDisplayName(hcp.name)}
               </h3>
 
               <div className="hcp-specialty">

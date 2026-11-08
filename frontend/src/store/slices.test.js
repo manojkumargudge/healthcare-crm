@@ -9,6 +9,9 @@ vi.mock('../api/client', () => ({
     createInteraction: vi.fn(),
     updateInteraction: vi.fn(),
     chatTurn: vi.fn(),
+    listFollowUps: vi.fn(),
+    suggestFollowUps: vi.fn(),
+    updateFollowUp: vi.fn(),
   },
 }))
 
@@ -16,6 +19,7 @@ import { api } from '../api/client'
 import hcpReducer, { fetchHcps, selectHcp } from './hcpSlice'
 import interactionsReducer, { fetchInteractions, submitStructuredInteraction, editInteraction } from './interactionsSlice'
 import chatReducer, { sendChatMessage, resetSession } from './chatSlice'
+import followUpsReducer, { generateSuggestions, acceptFollowUp, dismissFollowUp } from './followUpsSlice'
 import draftReducer, { setDraftInteraction, updateDraftField, clearDraftInteraction } from './draftInteractionSlice'
 
 const makeStore = (reducer) => configureStore({ reducer: { s: reducer } })
@@ -101,5 +105,53 @@ describe('draftInteractionSlice', () => {
     state = draftReducer(state, clearDraftInteraction())
     expect(state.raw_notes).toBe('')
     expect(state.products_discussed).toEqual([])
+  })
+})
+
+describe('followUpsSlice', () => {
+  it('stores suggestions per interaction and updates accepted/dismissed ones in place', async () => {
+    const s1 = { id: 'f1', interaction_id: 'i1', reason: 'Send PDF', status: 'Suggested' }
+    const s2 = { id: 'f2', interaction_id: 'i1', reason: 'Call back', status: 'Suggested' }
+    api.suggestFollowUps.mockResolvedValue([s1, s2])
+    api.listFollowUps.mockResolvedValue([s1, s2])
+    api.updateFollowUp.mockImplementation(async (id, { status }) => ({ ...(id === 'f1' ? s1 : s2), status }))
+    const store = makeStore(followUpsReducer)
+
+    await store.dispatch(generateSuggestions('i1'))
+    expect(api.suggestFollowUps).toHaveBeenCalledWith('i1')
+    expect(store.getState().s.byInteraction.i1.map((f) => f.id)).toEqual(['f1', 'f2'])
+
+    await store.dispatch(acceptFollowUp({ id: 'f1' }))
+    await store.dispatch(dismissFollowUp({ id: 'f2' }))
+    expect(store.getState().s.byInteraction.i1.map((f) => f.status)).toEqual(['Pending', 'Dismissed'])
+  })
+
+  it('records a failure message', async () => {
+    api.suggestFollowUps.mockRejectedValue(new Error('API 502'))
+    const store = makeStore(followUpsReducer)
+    await store.dispatch(generateSuggestions('i9'))
+    expect(store.getState().s).toMatchObject({ status: 'failed', error: 'API 502' })
+  })
+})
+
+describe('followUpsSlice concurrency', () => {
+  it('ignores a second generate for the same interaction while one is in flight', async () => {
+    api.suggestFollowUps.mockImplementation(() => new Promise((r) => setTimeout(() => r([]), 20)))
+    api.listFollowUps.mockResolvedValue([])
+    const store = configureStore({ reducer: { followUps: followUpsReducer } })
+    const first = store.dispatch(generateSuggestions('i1'))
+    const second = store.dispatch(generateSuggestions('i1')) // e.g. StrictMode double effect
+    await Promise.all([first, second])
+    expect(api.suggestFollowUps).toHaveBeenCalledTimes(1)
+    expect(store.getState().followUps.inFlight).toEqual({})
+    await store.dispatch(generateSuggestions('i1')) // allowed again once finished
+    expect(api.suggestFollowUps).toHaveBeenCalledTimes(2)
+  })
+
+  it('surfaces a failed accept', async () => {
+    api.updateFollowUp.mockRejectedValue(new Error('API 404'))
+    const store = configureStore({ reducer: { followUps: followUpsReducer } })
+    await store.dispatch(acceptFollowUp({ id: 'gone' }))
+    expect(store.getState().followUps.error).toBe('Couldn’t add follow-up: API 404')
   })
 })

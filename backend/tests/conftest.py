@@ -49,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool  # noqa: E402
 
 from app import models  # noqa: E402,F401  (registers tables on Base.metadata)
-from app.database import Base, get_db  # noqa: E402
+from app.database import Base, get_db  # noqa: E402,F401
 from app.main import app  # noqa: E402
 
 # NullPool: every session opens a fresh connection on the current event loop,
@@ -119,6 +119,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
         fake = FakeLLM(*responses)
         monkeypatch.setattr("app.agent.tools.ainvoke_resilient", fake)
         monkeypatch.setattr("app.agent.graph.ainvoke_resilient", fake)
+        monkeypatch.setattr("app.follow_ups.ainvoke_resilient", fake)
         return fake
 
     return _install
@@ -129,10 +130,16 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
 # --------------------------------------------------------------------------
 @pytest.fixture(scope="session")
 def _schema() -> Iterator[None]:
+    """Build the test schema the way real databases get it: every migration, from empty.
+
+    (Not Base.metadata.create_all: tests must run on the migrated schema, and
+    test_migrations checks that it matches the models.)
+    """
+    from app.db_migrations import apply_all, reset_test_schema
+
     async def _reset() -> None:
-        async with test_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
+        await reset_test_schema(TEST_DATABASE_URL)
+        await apply_all(TEST_DATABASE_URL)
 
     asyncio.run(_reset())
     yield

@@ -6,14 +6,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.agent.llm import close_groq_client, init_groq_client
-from app.database import engine, init_db
-from app.routers import hcp, interactions, chat
+from app.catalog import seed_materials
+from app.database import AsyncSessionLocal, engine, init_db
+from app.routers import chat, follow_ups, hcp, interactions, materials
 
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await init_db()
+    async with AsyncSessionLocal() as session:
+        await seed_materials(session)
     init_groq_client()
     try:
         yield
@@ -35,6 +38,8 @@ app.add_middleware(
 app.include_router(hcp.router)
 app.include_router(interactions.router)
 app.include_router(chat.router)
+app.include_router(materials.router)
+app.include_router(follow_ups.router)
 
 
 @app.get("/")

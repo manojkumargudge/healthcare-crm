@@ -133,3 +133,53 @@ async def test_live_brief_models_are_decommissioned(model: str) -> None:
     with pytest.raises(Exception) as exc:
         await llm.ainvoke("ping")
     assert any(h in str(exc.value).lower() for h in llm_module._DECOMMISSION_HINTS), str(exc.value)[:300]
+
+
+async def test_live_chat_logs_attendees_and_materials(client: httpx.AsyncClient, make_hcp, db: AsyncSession) -> None:
+    """Attendees and materials mentioned in chat land on the interaction; materials map to the catalog."""
+    from app.catalog import seed_materials
+    from app.models import Material
+
+    await seed_materials(db)
+    hcp = await make_hcp(name="Dr. Live Attendees", specialty="Oncologist", state="Karnataka")
+    await make_hcp(name="Dr. Priya Nair", specialty="Oncologist")
+    chat = _Chat(client, hcp["id"], "live-session-attendees")
+
+    body, calls = await chat.turn(
+        "Log this visit: I met the doctor together with Dr. Priya Nair and the clinic pharmacist, Sam Lee. "
+        "I left the OncoBoost Phase III efficacy PDF and a formulary coverage sheet. She was positive about efficacy."
+    )
+    assert "log_interaction" in _names(calls), calls
+    assert body["interaction"] is not None, body
+    row = await db.get(Interaction, body["interaction"]["id"])
+    assert row is not None
+    attendees = [a.lower() for a in row.attendees]
+    assert "dr. priya nair" in attendees, row.attendees
+    assert any("sam lee" in a for a in attendees), row.attendees
+    assert "Dr. Priya Nair" in row.attendees  # canonical HCP name
+    catalog = {m.name for m in (await db.execute(select(Material))).scalars().all()}
+    assert row.materials_shared, row.materials_shared
+    assert set(row.materials_shared) <= catalog  # every material is a catalog entry
+    assert any("oncoboost" in m.lower() for m in row.materials_shared), row.materials_shared
+
+    # edit via chat: add an attendee
+    _body, calls = await chat.turn(f"Also add Nurse Kim as an attendee on interaction {row.id}.")
+    assert "edit_interaction" in _names(calls), calls
+    await db.refresh(row)
+    assert any("kim" in a.lower() for a in row.attendees), row.attendees
+    assert "Dr. Priya Nair" in row.attendees  # existing attendees kept
+
+
+async def test_live_follow_up_suggestions(client: httpx.AsyncClient, hcp: dict) -> None:
+    created = (
+        await client.post(
+            "/api/interactions",
+            json={"hcp_id": hcp["id"], "products_discussed": ["OncoBoost"], "key_topics": ["efficacy", "pricing"],
+                  "raw_notes": "Asked for the Phase III PDF and pricing details; interested in an advisory board."},
+        )
+    ).json()
+    resp = await client.post(f"/api/interactions/{created['id']}/follow-ups/suggestions", timeout=120)
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert 1 <= len(rows) <= 3, rows
+    assert all(r["status"] == "Suggested" and len(r["reason"]) >= 3 for r in rows), rows

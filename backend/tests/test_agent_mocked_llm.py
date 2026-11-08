@@ -348,6 +348,7 @@ async def test_lifespan_creates_and_closes_shared_client(
         return None
 
     monkeypatch.setattr(main_module, "init_db", noop)
+    monkeypatch.setattr(main_module, "seed_materials", lambda _s: noop())
     async with main_module.app.router.lifespan_context(main_module.app):
         assert llm_module._clients is not None
         _sync, async_client = llm_module._clients

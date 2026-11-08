@@ -36,22 +36,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import HCP, Interaction, FollowUp, utcnow
 from app.agent.llm import ainvoke_resilient
 from app.samples import STATE_SAMPLE_LIMITS, coerce_samples, evaluate_sample_compliance
+from app.catalog import display_name, normalize_sentiment, resolve_attendees, resolve_materials, unapproved_materials
 
 __all__ = ["STATE_SAMPLE_LIMITS", "build_tools", "apply_compliance"]
 
 
-def apply_compliance(interaction: Interaction, hcp: HCP) -> None:
-    """Set compliance_flag/notes on `interaction` from its samples (no commit).
+async def apply_compliance(db: AsyncSession, interaction: Interaction, hcp: HCP) -> None:
+    """Set compliance_flag/notes from samples and materials (no commit).
 
-    No samples -> not flagged and no notes, matching what create has always
-    stored for sample-free interactions.
+    Flags sample quantities over the state limit and materials whose catalog
+    entry is not yet approved. No samples and no pending materials -> not
+    flagged and no notes, matching what create has always stored.
     """
+    issues: list[str] = []
+    checked = False
     if interaction.samples_dropped:
+        checked = True
         result = evaluate_sample_compliance(hcp.state, interaction.samples_dropped)
-        interaction.compliance_flag = result["compliance_flag"]
-        interaction.compliance_notes = result["compliance_notes"]
+        if result["compliance_flag"]:
+            issues.append(result["compliance_notes"])
+    pending = await unapproved_materials(db, interaction.materials_shared)
+    if pending:
+        issues.append(f"Materials pending approval: {', '.join(pending)}")
+    interaction.compliance_flag = bool(issues)
+    if issues:
+        interaction.compliance_notes = "; ".join(issues)
+    elif checked:
+        interaction.compliance_notes = "No compliance issues detected."
     else:
-        interaction.compliance_flag = False
         interaction.compliance_notes = None  # type: ignore[assignment]  # column is nullable=True but annotated Mapped[str]
 
 
@@ -81,15 +93,27 @@ def build_tools(db: AsyncSession) -> list[StructuredTool]:
     class LogInteractionArgs(BaseModel):
         hcp_id: str = Field(description="ID of the HCP this interaction is with")
         raw_text: str = Field(description="Free-text notes or chat transcript describing what happened in the interaction")
-        interaction_type: str = Field(default="Visit", description="One of Visit, Call, Email, Sample Drop, Conference")
+        interaction_type: str = Field(default="Visit", description="One of Meeting, Visit, Call, Email, Sample Drop, Conference")
+        attendees: Optional[list[str]] = Field(
+            default=None, description="Names of other people present (colleagues, other HCPs), if the rep mentioned any"
+        )
+        materials_shared: Optional[list[str]] = Field(
+            default=None, description="Materials/leave-behinds the rep shared, if mentioned"
+        )
 
-    async def log_interaction(hcp_id: str, raw_text: str, interaction_type: str = "Visit") -> str:
+    async def log_interaction(
+        hcp_id: str,
+        raw_text: str,
+        interaction_type: str = "Visit",
+        attendees: Optional[list[str]] = None,
+        materials_shared: Optional[list[str]] = None,
+    ) -> str:
         hcp = await db.get(HCP, hcp_id)
         if not hcp:
             return json.dumps({"error": f"No HCP found with id {hcp_id}"})
 
         extraction_prompt = f"""You are a pharmaceutical CRM data-extraction assistant.
-Read the field rep's notes below about a visit with Dr. {hcp.name} ({hcp.specialty or "unknown specialty"}).
+Read the field rep's notes below about a visit with {display_name(hcp.name)} ({hcp.specialty or "unknown specialty"}).
 Extract structured data and return ONLY valid JSON, no prose, no markdown fences, matching this schema:
 {{
   "summary": "2-3 sentence professional summary of the interaction",
@@ -97,6 +121,9 @@ Extract structured data and return ONLY valid JSON, no prose, no markdown fences
   "samples_dropped": [{{"product": "name", "qty": integer}}],
   "materials_shared": ["list of any leave-behinds, brochures, studies mentioned"],
   "key_topics": ["short topic tags, e.g. 'efficacy data', 'side effects', 'pricing'"],
+  "attendees": ["names of other people present besides the rep and {display_name(hcp.name)}"],
+  "outcomes": "key outcomes or agreements, one or two sentences, or null",
+  "follow_up_actions": "next steps or tasks the rep mentioned, or null",
   "hcp_sentiment": "Positive | Neutral | Negative",
   "sentiment_score": float between -1.0 and 1.0
 }}
@@ -105,6 +132,15 @@ Notes:
 \"\"\"{raw_text}\"\"\""""
         response, _model_used = await ainvoke_resilient(extraction_prompt, temperature=0.1, fast=True)
         data = _extract_json(response.content)
+        try:
+            sentiment = normalize_sentiment(data.get("hcp_sentiment"))
+        except ValueError:
+            sentiment = None
+        # Explicit tool arguments first, then anything the extraction found.
+        attendee_names = await resolve_attendees(db, list(attendees or []) + list(data.get("attendees") or []))
+        material_names = await resolve_materials(
+            db, list(materials_shared or []) + list(data.get("materials_shared") or [])
+        )
 
         interaction = Interaction(
             hcp_id=hcp_id,
@@ -113,13 +149,17 @@ Notes:
             interaction_date=date.today(),
             products_discussed=data.get("products_discussed", []),
             samples_dropped=coerce_samples(data.get("samples_dropped", []), source="log_interaction"),
-            materials_shared=data.get("materials_shared", []),
+            materials_shared=material_names,
             key_topics=data.get("key_topics", []),
-            hcp_sentiment=data.get("hcp_sentiment"),
-            sentiment_score=data.get("sentiment_score"),
+            attendees=attendee_names,
+            hcp_sentiment=sentiment,
+            sentiment_score=data.get("sentiment_score") if sentiment else None,
             raw_notes=raw_text,
+            outcomes=data.get("outcomes") if isinstance(data.get("outcomes"), str) else None,
+            follow_up_actions=data.get("follow_up_actions") if isinstance(data.get("follow_up_actions"), str) else None,
             ai_summary=data.get("summary"),
         )
+        await apply_compliance(db, interaction, hcp)
         db.add(interaction)
         await db.commit()
         await db.refresh(interaction)
@@ -130,13 +170,21 @@ Notes:
             "summary": interaction.ai_summary,
             "products_discussed": interaction.products_discussed,
             "samples_dropped": interaction.samples_dropped,
+            "materials_shared": interaction.materials_shared,
+            "attendees": interaction.attendees,
+            "compliance_flag": interaction.compliance_flag,
+            "compliance_notes": interaction.compliance_notes,
             "hcp_sentiment": interaction.hcp_sentiment,
         })
 
     # ---- 2. EDIT INTERACTION -------------------------------------------------
     class EditInteractionArgs(BaseModel):
         interaction_id: str = Field(description="ID of the interaction to edit")
-        updates: str = Field(description="JSON string of fields to update, e.g. '{\"hcp_sentiment\": \"Positive\"}'")
+        updates: str = Field(
+            description="JSON string of fields to update, e.g. '{\"hcp_sentiment\": \"Positive\"}'. Editable: "
+            "interaction_type, products_discussed, samples_dropped, materials_shared, key_topics, raw_notes, "
+            "hcp_sentiment (Positive/Neutral/Negative), attendees (list of names), outcomes, follow_up_actions"
+        )
         edit_reason: Optional[str] = Field(default=None, description="Why this edit is being made")
 
     async def edit_interaction(interaction_id: str, updates: str, edit_reason: Optional[str] = None) -> str:
@@ -151,10 +199,21 @@ Notes:
 
         allowed_fields = {
             "interaction_type", "products_discussed", "samples_dropped",
-            "materials_shared", "key_topics", "raw_notes", "hcp_sentiment",
+            "materials_shared", "key_topics", "raw_notes", "hcp_sentiment", "attendees",
+            "outcomes", "follow_up_actions",
         }
         if "samples_dropped" in update_dict:
             update_dict["samples_dropped"] = coerce_samples(update_dict["samples_dropped"], source="edit_interaction")
+        if "attendees" in update_dict:
+            update_dict["attendees"] = await resolve_attendees(db, update_dict["attendees"])
+        if "materials_shared" in update_dict:
+            update_dict["materials_shared"] = await resolve_materials(db, update_dict["materials_shared"])
+        if "hcp_sentiment" in update_dict:
+            try:
+                update_dict["hcp_sentiment"] = normalize_sentiment(update_dict["hcp_sentiment"])
+            except ValueError as exc:
+                await db.rollback()
+                return json.dumps({"error": str(exc)})
 
         before = {}
         changed = {}
@@ -176,12 +235,12 @@ Notes:
             interaction.sentiment_score = None  # type: ignore[assignment]  # column is nullable=True but annotated Mapped[float]
             changed["sentiment_score"] = None
 
-        if "samples_dropped" in changed:
+        if "samples_dropped" in changed or "materials_shared" in changed:
             hcp = await db.get(HCP, interaction.hcp_id)
             if hcp is None:  # FK makes this unreachable; fail without saving rather than guess
                 await db.rollback()
                 return json.dumps({"error": f"No HCP found with id {interaction.hcp_id}"})
-            apply_compliance(interaction, hcp)
+            await apply_compliance(db, interaction, hcp)
 
         history = list(interaction.edit_history or [])
         history.append({
@@ -201,7 +260,7 @@ Notes:
             "interaction_id": interaction.id,
             "changed_fields": list(changed.keys()),
         }
-        if "samples_dropped" in changed:
+        if "samples_dropped" in changed or "materials_shared" in changed:
             result["compliance_flag"] = interaction.compliance_flag
             result["compliance_notes"] = interaction.compliance_notes
         return json.dumps(result)
@@ -234,6 +293,7 @@ Notes:
                     "type": i.interaction_type,
                     "summary": i.ai_summary,
                     "products_discussed": i.products_discussed,
+                    "attendees": i.attendees or [],
                     "sentiment": i.hcp_sentiment,
                 } for i in recent
             ],
@@ -312,7 +372,7 @@ Notes:
         ) or "No prior interactions on file."
 
         prompt = f"""You are a pharmaceutical sales strategy assistant.
-HCP: Dr. {hcp.name}, {hcp.specialty or "specialty unknown"}, tier {hcp.tier}.
+HCP: {display_name(hcp.name)}, {hcp.specialty or "specialty unknown"}, tier {hcp.tier}.
 Recent interaction history:
 {history_text}
 

@@ -39,24 +39,10 @@ export default function LogInteractionScreen() {
   return (
     <main className="main">
 
+      {/* Header as in docs/brief-mockup.png: title only. The selected HCP is the form's "HCP Name". */}
       <div className="page-header">
-
-        <span className="page-subtitle">
-          HCP INTERACTION
-        </span>
-
-        <h1 className="page-title">
-          Log HCP Interaction
-        </h1>
-
-        <p className="page-description">
-          Capture details of your meeting with
-          <strong> {hcp.name}</strong>.
-        </p>
-
+        <h1 className="page-title">Log HCP Interaction</h1>
       </div>
-
-      <PulseStrip interactions={interactions} />
 
       <div className="interaction-layout">
 
@@ -79,6 +65,8 @@ export default function LogInteractionScreen() {
         <h2 className="section-title">
           Interaction History
         </h2>
+
+        <PulseStrip interactions={interactions} />
 
         <InteractionHistory />
 

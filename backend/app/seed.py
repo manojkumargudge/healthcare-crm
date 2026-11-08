@@ -2,6 +2,7 @@
 Populates a handful of demo HCPs so the app isn't empty for your walkthrough video."""
 import asyncio
 from app.database import AsyncSessionLocal, init_db
+from app.catalog import seed_materials
 from app.models import HCP
 
 DEMO_HCPS = [
@@ -17,6 +18,7 @@ async def seed():
         for data in DEMO_HCPS:
             db.add(HCP(**data))
         await db.commit()
+        await seed_materials(db)
     print(f"Seeded {len(DEMO_HCPS)} demo HCPs.")
 
 
