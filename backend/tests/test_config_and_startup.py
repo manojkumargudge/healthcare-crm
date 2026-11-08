@@ -17,6 +17,7 @@ from tests.conftest import test_engine
 SETTINGS_VARS = (
     "DATABASE_URL", "GROQ_API_KEY", "GROQ_MODEL", "GROQ_MODEL_FAST", "FRONTEND_ORIGIN", "BACKEND_PORT",
     "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT",
+    "CORS_ORIGINS", "RUN_MIGRATIONS_ON_STARTUP",
 )
 
 
@@ -104,9 +105,74 @@ def test_every_env_example_key_is_accepted(env_file) -> None:
     valid = {
         "GROQ_API_KEY": "k", "JWT_SECRET": "x" * 40, "ADMIN_PASSWORD": "long-enough-password",
         "ADMIN_EMAIL": "admin@example.com", "ACCESS_TOKEN_MINUTES": "15", "RATE_LIMIT_LLM_PER_MINUTE": "20",
+        "RUN_MIGRATIONS_ON_STARTUP": "true", "DATABASE_URL": "postgresql+asyncpg://u:p@h:1/db",
+        **{f"DEMO_{r}_PASSWORD": "long-enough-password" for r in ("REP", "MANAGER", "ADMIN")},
     }
     env_file(*(f"{k}={valid.get(k, '5432' if k.endswith('_PORT') else 'v')}" for k in keys))
     config.load_settings()
+
+
+# ------------------------------------------------- hosted DATABASE_URL -----
+def test_hosted_postgres_url_is_normalized(env_file, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file("GROQ_API_KEY=k")
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@ep-x.neon.tech/neondb?sslmode=require&channel_binding=require")
+    s = config.load_settings()
+    assert s.database_url.startswith("postgresql+asyncpg://u:p@ep-x.neon.tech/neondb?")
+    assert "sslmode=require" in s.database_url  # kept; split into asyncpg's ssl arg at connect time
+
+
+def test_invalid_sslmode_fails_startup(env_file, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file("GROQ_API_KEY=k")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@h/db?sslmode=always")
+    with pytest.raises(RuntimeError, match="sslmode must be one of"):
+        config.load_settings()
+
+
+def test_cors_origins_from_env(env_file, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file("DATABASE_URL=postgresql+asyncpg://u:p@h:1/db", "GROQ_API_KEY=k")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "http://localhost:5173")
+    monkeypatch.setenv("CORS_ORIGINS", " https://hcp-crm-web.onrender.com/ ,, http://localhost:5173,https://x.example")
+    assert config.load_settings().allowed_origins == [
+        "http://localhost:5173", "https://hcp-crm-web.onrender.com", "https://x.example",
+    ]
+
+
+async def test_health_answers_head_for_uptime_monitors() -> None:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main_module.app), base_url="http://test") as c:
+        resp = await c.head("/health")
+    assert resp.status_code == 200
+
+
+async def test_lifespan_skips_migrations_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake(*_a: object) -> None:
+        calls.append("called")
+
+    class FakeEngine:
+        async def dispose(self) -> None:
+            pass
+
+    monkeypatch.setattr(main_module.settings, "run_migrations_on_startup", False)
+    monkeypatch.setattr(main_module, "init_db", fake)
+    monkeypatch.setattr(main_module, "AsyncSessionLocal", lambda: _NullSession())
+    monkeypatch.setattr(main_module, "ensure_seed_admin", fake)
+    monkeypatch.setattr(main_module, "seed_materials", fake)
+    monkeypatch.setattr(main_module, "seed_products", fake)
+    monkeypatch.setattr(main_module, "engine", FakeEngine())
+    monkeypatch.setattr(main_module, "init_groq_client", lambda: None)
+    monkeypatch.setattr(main_module, "close_groq_client", lambda: fake())
+    async with main_module.app.router.lifespan_context(main_module.app):
+        pass
+    assert calls == ["called"] * 4  # 3 seeds + close; init_db was skipped
+
+
+class _NullSession:
+    async def __aenter__(self) -> "_NullSession":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
 
 
 # ------------------------------------------------------------ lifespan ------

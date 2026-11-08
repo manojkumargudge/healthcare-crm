@@ -4,6 +4,8 @@ from typing import Optional
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.db_url import normalize_database_url, split_ssl
+
 # The one .env file, at the repo root (shared with docker compose). Resolved
 # from this file's location so it works regardless of the working directory.
 # Inside the Docker image this path does not exist; compose passes env vars.
@@ -34,6 +36,11 @@ class Settings(BaseSettings):
     groq_transcribe_model: str = Field(default="whisper-large-v3-turbo", min_length=1)
 
     frontend_origin: str = "http://localhost:5173"
+    # Extra allowed browser origins, comma-separated (e.g. the Render static site URL).
+    cors_origins: str = ""
+
+    # Apply backend/migrations/*.sql on startup (idempotent). Set false to migrate by hand.
+    run_migrations_on_startup: bool = True
 
     # Auth. JWT_SECRET is required (no default); generate one with:
     #   python -c "import secrets; print(secrets.token_urlsafe(48))"
@@ -46,6 +53,11 @@ class Settings(BaseSettings):
     # Per-rep budget for the LLM endpoints (chat, follow-up suggestions, voice notes).
     rate_limit_llm_per_minute: int = Field(default=20, ge=1)
     backend_port: int = 8000  # compose-only (host port); declared so .env stays strict
+
+    # Demo accounts created by `python -m app.demo_seed` (demo-rep / demo-manager / demo-admin).
+    demo_rep_password: Optional[str] = Field(default=None, min_length=12)
+    demo_manager_password: Optional[str] = Field(default=None, min_length=12)
+    demo_admin_password: Optional[str] = Field(default=None, min_length=12)
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
 
@@ -67,7 +79,21 @@ class Settings(BaseSettings):
                 f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
                 f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
             )
+        # Hosted providers give postgres://...?sslmode=require; use the async driver
+        # and fail now (not on first query) if sslmode is invalid.
+        self.database_url = normalize_database_url(self.database_url)
+        split_ssl(self.database_url)
         return self
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        """FRONTEND_ORIGIN plus CORS_ORIGINS, without trailing slashes or duplicates."""
+        origins: list[str] = []
+        for raw in [self.frontend_origin, *self.cors_origins.split(",")]:
+            origin = raw.strip().rstrip("/")
+            if origin and origin not in origins:
+                origins.append(origin)
+        return origins
 
 
 def load_settings() -> Settings:

@@ -17,6 +17,22 @@ Reps sign in, and every interaction, chat message and follow-up belongs to the r
 
 The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](docs/brief-mockup.png)); see [`docs/screenshots/form-vs-mockup.png`](docs/screenshots/form-vs-mockup.png) for a side-by-side. The mockup's "Summarize from Voice Note (Requires Consent)" button is built: see [Voice notes](#voice-notes) and [`docs/screenshots/voice-3-summary-in-topics.png`](docs/screenshots/voice-3-summary-in-topics.png).
 
+## Live demo
+
+**Link:** _coming soon_ (`https://hcp-crm-web.onrender.com`, placeholder until it is deployed)
+
+| Sign in as | Email | Can do |
+|---|---|---|
+| Rep | `demo-rep@example.com` | Log, edit and chat about their own interactions |
+| Manager | `demo-manager@example.com` | Read every rep's interactions |
+| Admin | `demo-admin@example.com` | Everything, plus the Admin screen (reps, material approval) |
+
+- **Passwords:** _to be added when the demo goes live._
+- **Nightly reset:** the demo data is reset every night (03:17 UTC), so anything you add disappears.
+- **First request is slow:** the free hosting plans sleep when idle, so the first request can take up to a minute.
+- **Rate limit:** AI features (chat, follow-up suggestions, voice notes) are limited per user.
+- **Deploying your own copy:** see [docs/DEPLOY.md](docs/DEPLOY.md).
+
 ## Architecture
 
 ```
@@ -108,6 +124,8 @@ curl http://127.0.0.1:8000/health      # {"status":"healthy"}
 - **First sign-in:** the backend creates the seed admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` on startup. Sign in with those, then add reps under **Admin → Reps**.
 - **Startup order:** `--wait` returns once both services report healthy. Postgres is checked with `pg_isready`, the backend with `/health`, and the backend only starts after Postgres is healthy.
 - **Demo data:** to add 3 demo HCPs, run `docker compose exec backend python -m app.seed`. Each run adds another 3.
+  - For the full demo set, set `DEMO_REP_PASSWORD`, `DEMO_MANAGER_PASSWORD` and `DEMO_ADMIN_PASSWORD` in `.env`, then run `python -m app.demo_seed`. This adds demo users, 5 HCPs, interactions, follow-ups and a pending material.
+  - `--reset` wipes all app data first.
 - **Frontend:** Compose runs only Postgres and the backend. Start the frontend as in [Frontend](#frontend).
 - **Stopping:** `docker compose down` stops the stack; add `-v` to also delete the database volume.
 
@@ -254,7 +272,12 @@ Privacy and limits:
 
 ## Migrations
 
-There is no Alembic yet. Schema changes are hand-written, idempotent SQL files in `backend/migrations/`, applied in file-name order. `000_baseline.sql` recreates the app's original schema, so running every file on an **empty** database produces exactly the schema in `app/models.py`. CI checks this on every run and fails on any drift, and the test suite runs on that migrated schema. The backend still calls `create_all` at startup, which creates the same schema for a brand-new database.
+There is no Alembic yet. Schema changes are hand-written, idempotent SQL files in `backend/migrations/`, applied in file-name order. `000_baseline.sql` recreates the app's original schema, so running every file on an **empty** database produces exactly the schema in `app/models.py`. CI checks this on every run and fails on any drift, and the test suite runs on that migrated schema.
+
+The backend applies every migration at startup (`RUN_MIGRATIONS_ON_STARTUP=true`, the default):
+- A Postgres advisory lock serializes two instances that start at once.
+- Set it to `false` to apply migrations by hand.
+- Back up before upgrading a database that holds real data.
 
 | File | Purpose |
 |---|---|
@@ -306,6 +329,9 @@ backend/
     main.py        FastAPI app, lifespan, routers
     config.py      settings from environment (fail fast if required ones are missing)
     database.py    async engine and sessions
+    db_url.py      hosted DATABASE_URL handling (postgres:// scheme, sslmode -> asyncpg ssl)
+    db_migrations.py  migration runner and drift check
+    demo_seed.py   demo users + sample data for a public demo (--reset wipes first)
     models.py      HCP, Interaction, FollowUp, ChatMessage
     schemas.py     request/response models
     samples.py     sample validation and compliance rules
@@ -317,7 +343,9 @@ backend/
   Dockerfile, pyproject.toml, requirements.txt, requirements-dev.txt
 frontend/
   src/             components/, store/ (Redux slices + tests), api/client.js
-.github/workflows/ci.yml
+render.yaml        Render Blueprint (API on Docker + static frontend); see docs/DEPLOY.md
+.github/workflows/ci.yml           backend, frontend and e2e jobs
+.github/workflows/demo-reset.yml   nightly demo reset (skipped without the DATABASE_URL secret)
 docker-compose.yml
 .env.example       Compose settings (copy to .env)
 ```

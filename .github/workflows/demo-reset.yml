@@ -1,0 +1,59 @@
+name: Nightly demo reset
+
+# Wipes the public demo database and re-seeds demo users and sample data.
+# Needs repository secrets (Settings > Secrets and variables > Actions):
+#   DATABASE_URL            the Neon connection string used by the deployed API
+#   DEMO_REP_PASSWORD, DEMO_MANAGER_PASSWORD, DEMO_ADMIN_PASSWORD
+# Without DATABASE_URL the job is skipped (it still shows as a green run).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # 03:17 UTC daily
+  workflow_dispatch:        # "Run workflow" button: also used for the first seed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-reset
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    name: Reset demo data
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DEMO_REP_PASSWORD: ${{ secrets.DEMO_REP_PASSWORD }}
+      DEMO_MANAGER_PASSWORD: ${{ secrets.DEMO_MANAGER_PASSWORD }}
+      DEMO_ADMIN_PASSWORD: ${{ secrets.DEMO_ADMIN_PASSWORD }}
+      # Required by the app's settings but unused by the seed (no LLM calls, no tokens signed).
+      GROQ_API_KEY: not-used-by-the-seed
+      JWT_SECRET: not-used-by-the-seed-but-must-be-32-characters-long
+    steps:
+      - name: Skip when the DATABASE_URL secret is not set
+        if: env.DATABASE_URL == ''
+        working-directory: .
+        run: echo "::notice::DATABASE_URL secret not set; nothing to reset."
+
+      - uses: actions/checkout@v7
+        if: env.DATABASE_URL != ''
+
+      - uses: actions/setup-python@v7
+        if: env.DATABASE_URL != ''
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        if: env.DATABASE_URL != ''
+        run: pip install -r requirements.txt
+
+      - name: Reset and seed demo data
+        if: env.DATABASE_URL != ''
+        run: python -m app.demo_seed --reset
