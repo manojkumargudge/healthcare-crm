@@ -46,6 +46,10 @@ services:
         value: "15"
       - key: RATE_LIMIT_LLM_PER_MINUTE  # per signed-in user; caps Groq spend from a public demo
         value: "10"
+      - key: LLM_DAILY_CAP             # AI requests per UTC day across ALL users (0 = no cap)
+        value: "500"
+      - key: DEMO_MODE                 # read-only user management + "Demo mode" banner
+        value: "true"
 
   - type: web
     name: hcp-crm-web

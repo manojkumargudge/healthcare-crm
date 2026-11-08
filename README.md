@@ -30,7 +30,8 @@ The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](d
 - **Passwords:** _to be added when the demo goes live._
 - **Nightly reset:** the demo data is reset every night (03:17 UTC), so anything you add disappears.
 - **First request is slow:** the free hosting plans sleep when idle, so the first request can take up to a minute.
-- **Rate limit:** AI features (chat, follow-up suggestions, voice notes) are limited per user.
+- **Limits:** AI features (chat, follow-up suggestions, voice notes) are limited per user per minute, and the whole demo has a daily cap of 500 AI requests. The form always works.
+- **Demo mode:** user management is read-only, so the shared demo accounts can't be deactivated or have their passwords changed.
 - **Deploying your own copy:** see [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Architecture
@@ -236,7 +237,14 @@ RUN_LIVE_GROQ=1 LIVE_GROQ_API_KEY=<your key> pytest -m live -v   # same TEST_DAT
 
   - HCPs (doctors), the material catalog and the product catalog are shared company data that every signed-in rep can read.
   - The agent's tools act as the signed-in rep. For example, a rep's chat can't read or edit another rep's interactions, and a chat session can't be continued by anyone else.
-- **AI rate limit:** each rep has a budget of `RATE_LIMIT_LLM_PER_MINUTE` (default 20) requests per minute, shared across chat, follow-up suggestions and voice notes. Beyond that, requests get 429 with `Retry-After`. The limit is kept in memory per backend process.
+- **AI limits** (chat, follow-up suggestions and voice notes share both):
+  - **Per rep:** `RATE_LIMIT_LLM_PER_MINUTE` (default 20) requests per minute, kept in memory per backend process.
+  - **Global:** `LLM_DAILY_CAP` (default 500) requests per UTC day across all reps. It is counted in the `llm_usage` table, so restarts don't reset it; `0` disables it.
+  - **When a limit is hit:** the request gets 429 with `Retry-After`, and the UI shows the server's plain-language message. The form still works.
+- **Interactions list:** managers and admins see a **Rep** line on each interaction (the owner's email) and can filter the list by rep. Reps only see their own interactions, so they get neither.
+- **Demo mode (`DEMO_MODE=true`):**
+  - User management is read-only (adding reps, role, active flag and password reset all return 403), so the shared demo accounts can't be locked or taken over.
+  - Every screen, including sign-in, shows a "Demo mode" banner, driven by the public `GET /api/meta`.
 - **Admin screen:** approve pending materials (this re-runs compliance and clears stale "pending approval" flags), manage products, and manage reps. The last active admin can't be demoted or deactivated.
 
 ## Product catalog
@@ -290,6 +298,7 @@ The backend applies every migration at startup (`RUN_MIGRATIONS_ON_STARTUP=true`
 | `006_products_voice_consent.sql` | Adds the `products` catalog (backfilled from existing products and sample names) and `voice_note_consent` / `voice_note_consent_at` on interactions. |
 | `007_unmatched_products.sql` | Adds `interactions.unmatched_products`: product names from chat that match no catalog product. |
 | `008_users_ownership.sql` | Adds `users` and `owner_id` on interactions, chat messages and follow-ups, plus `product_matches`. Existing rows are assigned to the seed admin, so run it with the runner and with `ADMIN_EMAIL` / `ADMIN_PASSWORD` set. It stops with an error rather than leave rows without an owner. |
+| `009_llm_usage.sql` | Adds `llm_usage` (one row per UTC day) for the global daily AI cap. |
 
 Every file is safe to run more than once. Back up first, then apply all of them:
 
@@ -318,7 +327,7 @@ To add a migration, create the next numbered file, make it idempotent, update `a
 - **Not done yet:**
   - The agent writes to the database without asking for confirmation.
   - Edit history is a JSON column on the record, not an append-only audit table.
-  - Rate limiting covers only the AI endpoints, and is in memory (one backend process).
+  - Rate limiting covers only the AI endpoints. The per-rep limit is in memory (one backend process); the daily cap is in the database.
 - **Data:** this system stores data about doctors (HCPs), not patients.
 
 ## Project layout

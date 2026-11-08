@@ -38,7 +38,13 @@ const chatSlice = createSlice({
       })
       .addCase(sendChatMessage.rejected, (state, action) => {
         state.status = 'failed'
-        state.messages.push({ role: 'assistant', content: `Something went wrong: ${action.error.message}`, error: true })
+        const limited = action.error.name === 'RateLimitError'
+        state.messages.push({
+          role: 'assistant',
+          content: limited ? action.error.message : `Something went wrong: ${action.error.message}`,
+          error: true,
+          rateLimited: limited,
+        })
       })
   },
 })

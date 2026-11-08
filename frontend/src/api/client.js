@@ -13,14 +13,27 @@ export function setUnauthorizedHandler(handler) {
   onUnauthorized = handler || (() => {})
 }
 
+export const RATE_LIMIT_FALLBACK = 'Too many AI requests right now. Please try again in a minute.'
+
 async function parseError(res) {
   let body = await res.text()
+  let detail = null
   try {
-    const detail = JSON.parse(body).detail
-    if (typeof detail === 'string') body = detail
-    else if (Array.isArray(detail)) body = detail.map((d) => d.msg).join('; ')
+    const parsed = JSON.parse(body).detail
+    if (typeof parsed === 'string') detail = parsed
+    else if (Array.isArray(parsed)) detail = parsed.map((d) => d.msg).join('; ')
   } catch { /* not JSON: keep the text */ }
-  return new Error(`API ${res.status}: ${body}`)
+  if (res.status === 429) {
+    // AI limits (per minute or the daily cap): the server's message is written for
+    // people, so show it as-is instead of "API 429: ...".
+    const err = new Error(detail || RATE_LIMIT_FALLBACK)
+    err.name = 'RateLimitError' // survives Redux Toolkit's error serialization
+    err.status = 429
+    return err
+  }
+  const err = new Error(`API ${res.status}: ${detail ?? body}`)
+  err.status = res.status
+  return err
 }
 
 async function send(path, { headers = {}, auth = true, ...options } = {}) {
@@ -52,6 +65,7 @@ export const api = {
       body: new URLSearchParams({ username: email, password }).toString(),
     }),
   me: () => json('/auth/me'),
+  meta: () => send('/api/meta', { auth: false }),
 
   listHcps: () => json('/api/hcps'),
   createHcp: (data) => json('/api/hcps', 'POST', data),

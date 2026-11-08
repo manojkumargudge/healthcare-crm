@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
+from app.schemas import AppMeta
 from app.agent.llm import close_groq_client, init_groq_client
 from app.catalog import ensure_seed_admin, seed_materials, seed_products
 from app.database import AsyncSessionLocal, engine, init_db
@@ -46,6 +47,12 @@ app.include_router(materials.router)
 app.include_router(follow_ups.router)
 app.include_router(products.router)
 app.include_router(voice_notes.router)
+
+
+@app.get("/api/meta", response_model=AppMeta)
+async def meta() -> AppMeta:
+    """Public (no sign-in): what the UI needs before login, e.g. to show the demo banner."""
+    return AppMeta(demo_mode=settings.demo_mode, llm_daily_cap=settings.llm_daily_cap)
 
 
 @app.get("/")

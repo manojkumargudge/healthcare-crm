@@ -4,12 +4,15 @@ import Sidebar from './components/Sidebar'
 import LogInteractionScreen from './components/LogInteractionScreen'
 import LoginPage from './components/LoginPage'
 import AdminScreen from './components/AdminScreen'
+import DemoBanner from './components/DemoBanner'
+import { useAppMeta } from './lib/meta'
 import { logout } from './store/authSlice'
 
 export default function App() {
   const dispatch = useDispatch()
   const { token, user } = useSelector((s) => s.auth)
   const [screen, setScreen] = useState('log')
+  const meta = useAppMeta()
 
   if (!token || !user) return <LoginPage />
 
@@ -18,6 +21,7 @@ export default function App() {
 
   return (
     <div className="app-frame">
+      <DemoBanner />
       <header className="top-bar">
         <nav className="top-nav" aria-label="Main">
           <button type="button" className={current === 'log' ? 'active' : ''} onClick={() => setScreen('log')}>Interactions</button>
@@ -32,7 +36,7 @@ export default function App() {
       </header>
       <div className="app-shell">
         <Sidebar />
-        {current === 'admin' ? <AdminScreen currentUserId={user.id} /> : <LogInteractionScreen />}
+        {current === 'admin' ? <AdminScreen currentUserId={user.id} demoMode={Boolean(meta?.demo_mode)} /> : <LogInteractionScreen />}
       </div>
     </div>
   )

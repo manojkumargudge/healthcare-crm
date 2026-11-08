@@ -41,8 +41,9 @@ A public demo lets anyone trigger LLM calls, so cap the cost:
 1. **Create a key.** In [console.groq.com](https://console.groq.com/keys), create a **new API key** just for the demo (e.g. `hcp-crm-demo`). You can then revoke it without touching other projects.
 2. **Set a spend limit.** Under **Settings → Billing** (spend limits / usage limits), set a **monthly spend limit** you're comfortable with, plus an alert below it.
    - On the free tier there is no bill. Groq's own rate limits apply instead, and the demo slows down when it hits them.
-3. **Keep the app's limit.** The app limits AI requests per signed-in user. `render.yaml` sets `RATE_LIMIT_LLM_PER_MINUTE=10`; lower it if needed.
-   - The limiter is in memory, which is fine for the single free instance.
+3. **Keep the app's limits.** The app has two:
+   - **Per user:** `render.yaml` sets `RATE_LIMIT_LLM_PER_MINUTE=10`. This limiter is in memory, which is fine for the single free instance.
+   - **Global:** `LLM_DAILY_CAP=500` AI requests per UTC day across everyone. It is counted in the database, so restarts don't reset it. When it is reached, users see a friendly message and the form still works.
 
 ## 2. Neon: the database
 
@@ -172,6 +173,8 @@ In the README's **Live demo** section:
 | `GROQ_TRANSCRIBE_MODEL` | no | `whisper-large-v3-turbo` | Voice notes. |
 | `ACCESS_TOKEN_MINUTES` | no | `15` | Sign-in token lifetime (1–240). |
 | `RATE_LIMIT_LLM_PER_MINUTE` | no | `20` (`render.yaml`: `10`) | AI requests per user per minute. |
+| `LLM_DAILY_CAP` | no | `500` (`render.yaml`: `500`) | AI requests per UTC day across all users, counted in the database (survives restarts). `0` = no cap. Users see a friendly message when it is reached. |
+| `DEMO_MODE` | no | `false` (`render.yaml`: `true`) | User management becomes read-only, so the demo accounts can't be deactivated, re-roled or have their passwords reset. The UI shows a "Demo mode" banner. |
 | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | no | (none) | Extra seed admin created on startup. Not needed for the demo, because demo-admin exists. |
 | `DEMO_REP_PASSWORD`, `DEMO_MANAGER_PASSWORD`, `DEMO_ADMIN_PASSWORD` | only for `app.demo_seed` | (none) | 12+ characters each. |
 | `PORT` | set by Render | `8000` | The container listens on it. |

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { login } from '../store/authSlice'
+import DemoBanner from './DemoBanner'
 
 export default function LoginPage() {
   const dispatch = useDispatch()
@@ -15,6 +16,7 @@ export default function LoginPage() {
 
   return (
     <main className="login-page">
+      <DemoBanner />
       <form className="login-card" onSubmit={submit} aria-label="Sign in">
         <h1 className="logo">AI-First CRM</h1>
         <p className="login-subtitle">Sign in to log HCP interactions.</p>

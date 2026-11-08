@@ -93,6 +93,8 @@ test('material approval: a rep-added material is flagged until an admin approves
   await page.getByRole('button', { name: /Search\/Add/ }).click()
   await page.locator('#materials').fill(material)
   await page.getByRole('option', { name: `Add "${material}" to materials` }).click()
+  // Adding a new material is async (it is created via the API first): wait for its chip.
+  await expect(page.getByRole('button', { name: `Remove ${material}` })).toBeVisible()
   await page.getByRole('button', { name: 'Log Interaction' }).click()
   await expect(page.locator('.form-success')).toContainText(`Materials pending approval: ${material}`)
   await expect(page.locator('.compliance-flag', { hasText: material })).toBeVisible()

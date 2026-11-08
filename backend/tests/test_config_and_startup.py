@@ -17,7 +17,7 @@ from tests.conftest import test_engine
 SETTINGS_VARS = (
     "DATABASE_URL", "GROQ_API_KEY", "GROQ_MODEL", "GROQ_MODEL_FAST", "FRONTEND_ORIGIN", "BACKEND_PORT",
     "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT",
-    "CORS_ORIGINS", "RUN_MIGRATIONS_ON_STARTUP",
+    "CORS_ORIGINS", "RUN_MIGRATIONS_ON_STARTUP", "LLM_DAILY_CAP", "DEMO_MODE",
 )
 
 
@@ -106,6 +106,7 @@ def test_every_env_example_key_is_accepted(env_file) -> None:
         "GROQ_API_KEY": "k", "JWT_SECRET": "x" * 40, "ADMIN_PASSWORD": "long-enough-password",
         "ADMIN_EMAIL": "admin@example.com", "ACCESS_TOKEN_MINUTES": "15", "RATE_LIMIT_LLM_PER_MINUTE": "20",
         "RUN_MIGRATIONS_ON_STARTUP": "true", "DATABASE_URL": "postgresql+asyncpg://u:p@h:1/db",
+        "LLM_DAILY_CAP": "500", "DEMO_MODE": "false",
         **{f"DEMO_{r}_PASSWORD": "long-enough-password" for r in ("REP", "MANAGER", "ADMIN")},
     }
     env_file(*(f"{k}={valid.get(k, '5432' if k.endswith('_PORT') else 'v')}" for k in keys))

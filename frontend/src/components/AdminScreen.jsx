@@ -80,7 +80,7 @@ function Products() {
   )
 }
 
-function Users({ currentUserId }) {
+function Users({ currentUserId, demoMode }) {
   const { items, error, setError, reload } = useLoader(api.listUsers)
   const [draft, setDraft] = useState({ email: '', password: '', role: 'rep' })
   const run = async (fn) => { try { await fn(); setError(''); await reload() } catch (e) { setError(e.message) } }
@@ -89,6 +89,12 @@ function Users({ currentUserId }) {
       <h2 id="admin-users">Reps</h2>
       <p className="empty-note">Every app user is a rep. Role decides access: rep = own interactions only, manager = reads everyone's, admin = manages the app.</p>
       {error && <p className="form-error" role="alert">{error}</p>}
+      {demoMode && (
+        <p className="demo-readonly" data-testid="users-read-only">
+          Demo mode: user management is read-only, so the shared demo accounts can’t be changed.
+        </p>
+      )}
+      {!demoMode && (
       <form className="admin-inline" onSubmit={(e) => { e.preventDefault(); run(async () => { await api.createUser(draft); setDraft({ email: '', password: '', role: 'rep' }) }) }}>
         <input aria-label="Email" type="email" placeholder="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} required />
         <input aria-label="Initial password" type="password" placeholder="password (12+ chars)" minLength={12} value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} required />
@@ -97,6 +103,7 @@ function Users({ currentUserId }) {
         </select>
         <button className="btn-small" type="submit">Add rep</button>
       </form>
+      )}
       <table className="admin-table">
         <thead><tr><th>Email</th><th>Role</th><th>Status</th><th /></tr></thead>
         <tbody>
@@ -104,12 +111,15 @@ function Users({ currentUserId }) {
             <tr key={u.id}>
               <td>{u.email}{u.id === currentUserId && <span className="option-meta"> (you)</span>}</td>
               <td>
+                {demoMode ? u.role : (
                 <select aria-label={`Role for ${u.email}`} value={u.role} onChange={(e) => run(() => api.updateUser(u.id, { role: e.target.value }))}>
                   {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
+                )}
               </td>
               <td>{u.is_active ? 'Active' : 'Inactive'}</td>
               <td className="admin-actions">
+                {!demoMode && (<>
                 <button type="button" className="btn-link" onClick={() => run(() => api.updateUser(u.id, { is_active: !u.is_active }))}>
                   {u.is_active ? 'Deactivate' : 'Activate'}
                 </button>
@@ -117,6 +127,7 @@ function Users({ currentUserId }) {
                   const pw = window.prompt(`New password for ${u.email} (12+ characters)`)
                   if (pw) run(() => api.updateUser(u.id, { password: pw }))
                 }}>Reset password</button>
+                </>)}
               </td>
             </tr>
           ))}
@@ -126,13 +137,13 @@ function Users({ currentUserId }) {
   )
 }
 
-export default function AdminScreen({ currentUserId }) {
+export default function AdminScreen({ currentUserId, demoMode = false }) {
   return (
     <main className="main admin-screen">
       <div className="page-header"><h1 className="page-title">Admin</h1></div>
       <PendingMaterials />
       <Products />
-      <Users currentUserId={currentUserId} />
+      <Users currentUserId={currentUserId} demoMode={demoMode} />
     </main>
   )
 }
