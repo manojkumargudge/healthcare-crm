@@ -168,13 +168,15 @@ There is no Alembic yet. New databases get their schema from `create_all` at sta
 | File | Purpose |
 |---|---|
 | `001_timestamps_to_timestamptz.sql` | Converts the timestamp columns to `timestamptz`, interpreting old values as UTC. Needed once for databases created before timestamps became timezone-aware. Without it, writes fail with `can't subtract offset-naive and offset-aware datetimes`. Safe to run more than once. |
+| `002_chat_messages_dedupe.sql` | Adds `chat_messages.tool_call_id` and removes duplicate tool rows left by an old chat bug that re-saved earlier tool messages on every turn. Only tool rows are deduplicated; repeated user/assistant messages are real and kept. Safe to run more than once. |
 
-Back up first, then run it against the Compose database:
+Back up first, then run them in order against the Compose database:
 
 ```bash
 docker compose exec -T postgres pg_dump -U hcp_user -d hcp_crm -Fc > hcp_crm_backup.dump
 docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   < backend/migrations/001_timestamps_to_timestamptz.sql
+# then the same command with 002_chat_messages_dedupe.sql
 ```
 
 Replace `hcp_user` and `hcp_crm` with your `POSTGRES_USER` and `POSTGRES_DB`.
