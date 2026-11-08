@@ -13,7 +13,7 @@ from app.agent.tools import _extract_json, build_tools
 from sqlalchemy import select
 
 from app.models import HCP, ChatMessage, Interaction
-from tests.conftest import GroqCalledError
+from tests.conftest import ADMIN_AUTHZ, ADMIN_ID, GroqCalledError
 
 
 # ------------------------------------------------------- guard sanity ------
@@ -128,7 +128,7 @@ async def test_extraction_uses_fast_model_and_recommendation_uses_main(db: Async
     db.add(hcp)
     await db.commit()
     fake = fake_llm(json.dumps({"summary": "s"}), "Bring the new study.")
-    tools = {t.name: t for t in build_tools(db)}
+    tools = {t.name: t for t in build_tools(db, ADMIN_AUTHZ)}
     await tools["log_interaction"].coroutine(hcp_id=hcp.id, raw_text="notes")  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     await tools["suggest_next_best_action"].coroutine(hcp_id=hcp.id)  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     assert [c["fast"] for c in fake.calls] == [True, False]
@@ -167,7 +167,7 @@ async def test_log_interaction_tool_persists_extracted_fields(db: AsyncSession, 
             }
         )
     )
-    tool = next(t for t in build_tools(db) if t.name == "log_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "log_interaction")
     out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="Met Dr Rao, 3 samples"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
 
     assert out["status"] == "logged"
@@ -185,7 +185,7 @@ async def test_log_interaction_tool_persists_extracted_fields(db: AsyncSession, 
 
 async def test_log_interaction_tool_unknown_hcp_skips_llm(db: AsyncSession, fake_llm) -> None:
     fake = fake_llm()
-    tool = next(t for t in build_tools(db) if t.name == "log_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "log_interaction")
     out = json.loads(await tool.coroutine(hcp_id="missing", raw_text="x"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     assert out == {"error": "No HCP found with id missing"}
     assert fake.calls == []
@@ -251,7 +251,7 @@ async def test_log_interaction_tool_coerces_and_skips_bad_llm_samples(
         )
     )
     caplog.set_level("WARNING", logger="hcp_crm.samples")
-    tool = next(t for t in build_tools(db) if t.name == "log_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "log_interaction")
     out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="notes"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
 
     assert out["samples_dropped"] == [{"product": "Good", "qty": 3}]
@@ -266,7 +266,7 @@ async def test_log_interaction_tool_tolerates_non_list_samples(db: AsyncSession,
     db.add(hcp)
     await db.commit()
     fake_llm(json.dumps({"summary": "s", "samples_dropped": "three boxes"}))
-    tool = next(t for t in build_tools(db) if t.name == "log_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "log_interaction")
     out = json.loads(await tool.coroutine(hcp_id=hcp.id, raw_text="notes"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     assert out["samples_dropped"] == []
 
@@ -275,11 +275,11 @@ async def test_edit_interaction_tool_reruns_compliance(db: AsyncSession) -> None
     hcp = HCP(name="Dr. VT", state="Vermont")
     db.add(hcp)
     await db.commit()
-    row = Interaction(hcp_id=hcp.id, samples_dropped=[], compliance_flag=False)
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp.id, samples_dropped=[], compliance_flag=False)
     db.add(row)
     await db.commit()
 
-    tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "edit_interaction")
     out = json.loads(
         await tool.coroutine(  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
             interaction_id=row.id,
@@ -299,11 +299,11 @@ async def test_edit_interaction_tool_without_samples_skips_compliance(db: AsyncS
     hcp = HCP(name="Dr. VT", state="Vermont")
     db.add(hcp)
     await db.commit()
-    row = Interaction(hcp_id=hcp.id, samples_dropped=[{"product": "X", "qty": 1}], compliance_flag=True, compliance_notes="n")
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp.id, samples_dropped=[{"product": "X", "qty": 1}], compliance_flag=True, compliance_notes="n")
     db.add(row)
     await db.commit()
 
-    tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "edit_interaction")
     out = json.loads(await tool.coroutine(interaction_id=row.id, updates=json.dumps({"raw_notes": "x"})))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     assert "compliance_flag" not in out
     await db.refresh(row)
@@ -419,11 +419,11 @@ async def test_edit_tool_nulls_score_when_sentiment_label_changes(db: AsyncSessi
     hcp = HCP(name="Dr. S")
     db.add(hcp)
     await db.commit()
-    row = Interaction(hcp_id=hcp.id, hcp_sentiment="Positive", sentiment_score=0.6)
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp.id, hcp_sentiment="Positive", sentiment_score=0.6)
     db.add(row)
     await db.commit()
 
-    tool = next(t for t in build_tools(db) if t.name == "edit_interaction")
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == "edit_interaction")
     out = json.loads(
         await tool.coroutine(interaction_id=row.id, updates=json.dumps({"hcp_sentiment": "Neutral"}))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     )

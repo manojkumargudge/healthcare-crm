@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.tools import build_tools
 from app.catalog import SEED_MATERIALS, seed_materials
 from app.models import HCP, FollowUp, Interaction, Material
-from tests.conftest import test_engine
+from tests.conftest import ADMIN_AUTHZ, ADMIN_ID, test_engine
 
 def _tool(db: AsyncSession, name: str):
-    return next(t for t in build_tools(db) if t.name == name)
+    return next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == name)
 
 
 async def _call(db: AsyncSession, name: str, **kwargs: Any) -> dict:
@@ -51,7 +51,7 @@ async def test_patch_rejects_unknown_sentiment(client: httpx.AsyncClient, hcp: d
 
 
 async def test_manual_label_wins_over_ai_label(client: httpx.AsyncClient, hcp: dict, db: AsyncSession) -> None:
-    row = Interaction(hcp_id=hcp["id"], channel="chat", hcp_sentiment="Positive", sentiment_score=0.9)
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp["id"], channel="chat", hcp_sentiment="Positive", sentiment_score=0.9)
     db.add(row)
     await db.commit()
     body = (await client.patch(f"/api/interactions/{row.id}", json={"hcp_sentiment": "Negative"})).json()
@@ -62,7 +62,7 @@ async def test_edit_tool_normalizes_label_case_and_rejects_unknown(db: AsyncSess
     hcp = HCP(name="Dr. Case")
     db.add(hcp)
     await db.commit()
-    row = Interaction(hcp_id=hcp.id)
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp.id)
     db.add(row)
     await db.commit()
 
@@ -138,7 +138,7 @@ async def test_edit_tool_sets_attendees(db: AsyncSession) -> None:
     hcp = HCP(name="Dr. E")
     db.add(hcp)
     await db.commit()
-    row = Interaction(hcp_id=hcp.id, attendees=[])
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp.id, attendees=[])
     db.add(row)
     await db.commit()
     out = await _call(db, "edit_interaction", interaction_id=row.id, updates=json.dumps({"attendees": ["dr. e", "Nurse Kim"]}))

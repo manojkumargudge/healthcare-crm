@@ -1,6 +1,6 @@
 import json
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,17 +8,29 @@ from app.database import get_db
 from app.models import ChatMessage, Interaction
 from app.schemas import ChatTurnRequest, ChatTurnResponse, InteractionOut
 from app.agent.graph import build_agent_graph
+from app.authz import Authz, get_authz
+from app.ratelimit import llm_rate_limit
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
-# In-memory per-session LangChain message history (fine for a demo/assignment;
-# a production build would persist + rehydrate this from the DB per request).
-_SESSION_HISTORY: dict[str, list] = {}
+# In-memory LangChain message history, keyed by (rep, session) so one rep can never
+# continue or read another rep's conversation (a production build would persist +
+# rehydrate this from the DB per request).
+_SESSION_HISTORY: dict[tuple[str, str], list] = {}
+
+
+async def _session_owners(db: AsyncSession, session_id: str) -> set[str]:
+    rows = await db.execute(select(ChatMessage.owner_id).where(ChatMessage.session_id == session_id).distinct())
+    return {r[0] for r in rows.all()}
 
 
 @router.post("/turn", response_model=ChatTurnResponse)
-async def chat_turn(payload: ChatTurnRequest, db: AsyncSession = Depends(get_db)):
-    history = _SESSION_HISTORY.setdefault(payload.session_id, [])
+async def chat_turn(payload: ChatTurnRequest, authz: Authz = Depends(llm_rate_limit), db: AsyncSession = Depends(get_db)):
+    owners = await _session_owners(db, payload.session_id)
+    if owners and owners != {authz.user.id}:
+        # Someone else's session id: never continue it (not even as admin).
+        raise HTTPException(404, "Chat session not found")
+    history = _SESSION_HISTORY.setdefault((authz.user.id, payload.session_id), [])
 
     # If the frontend already knows which HCP is selected,
     # explicitly provide that context to the LLM.
@@ -43,18 +55,19 @@ IMPORTANT:
     db.add(
         ChatMessage(
             session_id=payload.session_id,
+            owner_id=authz.user.id,
             role="user",
             content=payload.message,
         )
     )
     await db.commit()
 
-    graph = build_agent_graph(db)
+    graph = build_agent_graph(db, authz)
     turn_start = len(history)  # history already includes this turn's user message
     result = await graph.ainvoke({"messages": history})
 
     all_messages = result["messages"]
-    _SESSION_HISTORY[payload.session_id] = all_messages
+    _SESSION_HISTORY[(authz.user.id, payload.session_id)] = all_messages
     # Only what the agent produced during *this* turn. The graph returns the
     # whole session; reporting/persisting all of it duplicated earlier turns.
     new_messages = all_messages[turn_start:]
@@ -88,6 +101,7 @@ IMPORTANT:
             db.add(
                 ChatMessage(
                     session_id=payload.session_id,
+                    owner_id=authz.user.id,
                     role="tool",
                     content=str(m.content),
                     tool_name=m.name,
@@ -98,6 +112,7 @@ IMPORTANT:
     db.add(
         ChatMessage(
             session_id=payload.session_id,
+            owner_id=authz.user.id,
             role="assistant",
             content=final_reply,
         )
@@ -108,7 +123,7 @@ IMPORTANT:
     interaction_out = None
     if logged_interaction_id:
         interaction = await db.get(Interaction, logged_interaction_id)
-        if interaction:
+        if interaction and authz.can_read(interaction):
             interaction_out = InteractionOut.model_validate(interaction)
 
     return ChatTurnResponse(
@@ -120,14 +135,16 @@ IMPORTANT:
 
 
 @router.get("/{session_id}/history")
-async def get_history(session_id: str, db: AsyncSession = Depends(get_db)):
+async def get_history(session_id: str, authz: Authz = Depends(get_authz), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(ChatMessage)
+        authz.read_filter(select(ChatMessage), ChatMessage)
         .where(ChatMessage.session_id == session_id)
         .order_by(ChatMessage.created_at)
     )
 
     rows = result.scalars().all()
+    if not rows:
+        raise HTTPException(404, "Chat session not found")
 
     return [
         {

@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import pytest
+from tests.conftest import ADMIN_ID
 
 
 async def _create(client: httpx.AsyncClient, **body: Any) -> httpx.Response:
@@ -249,7 +250,7 @@ async def test_patch_without_samples_leaves_compliance_alone(client: httpx.Async
 async def _with_score(db, hcp_id: str, label: str | None, score: float | None) -> str:
     from app.models import Interaction
 
-    row = Interaction(hcp_id=hcp_id, hcp_sentiment=label, sentiment_score=score)
+    row = Interaction(owner_id=ADMIN_ID, hcp_id=hcp_id, hcp_sentiment=label, sentiment_score=score)
     db.add(row)
     await db.commit()
     return row.id

@@ -101,7 +101,11 @@ def test_every_env_example_key_is_accepted(env_file) -> None:
     lines = [ln.lstrip("# ").strip() for ln in example.read_text(encoding="utf-8").splitlines()]
     keys = sorted({ln.split("=", 1)[0] for ln in lines if "=" in ln and ln.split("=", 1)[0].isupper()})
     assert {"POSTGRES_USER", "GROQ_API_KEY", "POSTGRES_PORT", "GROQ_MODEL_FAST"} <= set(keys)
-    env_file(*(f"{k}={'k' if k == 'GROQ_API_KEY' else ('5432' if k.endswith('_PORT') else 'v')}" for k in keys))
+    valid = {
+        "GROQ_API_KEY": "k", "JWT_SECRET": "x" * 40, "ADMIN_PASSWORD": "long-enough-password",
+        "ADMIN_EMAIL": "admin@example.com", "ACCESS_TOKEN_MINUTES": "15", "RATE_LIMIT_LLM_PER_MINUTE": "20",
+    }
+    env_file(*(f"{k}={valid.get(k, '5432' if k.endswith('_PORT') else 'v')}" for k in keys))
     config.load_settings()
 
 
@@ -162,7 +166,7 @@ async def test_schema_uses_timestamptz(db: AsyncSession) -> None:
             )
         )
     ).all()
-    assert len(rows) == 7  # 5 original + materials.created_at + products.created_at
+    assert len(rows) == 8  # 5 original + materials, products and users created_at
     assert {r.data_type for r in rows} == {"timestamp with time zone"}
 
 

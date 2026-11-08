@@ -14,11 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.tools import build_tools
 from app.catalog import SEED_MATERIALS, seed_materials
 from app.models import HCP, Interaction, Material
-from tests.conftest import test_engine
+from tests.conftest import ADMIN_AUTHZ, test_engine
 
 
 async def _call(db: AsyncSession, name: str, **kwargs: Any) -> dict:
-    tool = next(t for t in build_tools(db) if t.name == name)
+    tool = next(t for t in build_tools(db, ADMIN_AUTHZ) if t.name == name)
     return json.loads(await tool.coroutine(**kwargs))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
 
 

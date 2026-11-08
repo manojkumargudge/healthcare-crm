@@ -34,6 +34,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 EXPECTED_EXPRESSION_INDEXES = {
     ("materials", "uq_materials_name_lower"): "lower((name)::text)",
     ("products", "uq_products_name_lower"): "lower((name)::text)",
+    ("users", "uq_users_email_lower"): "lower((email)::text)",
 }
 
 
@@ -59,6 +60,16 @@ async def apply_all(url: str, *, schema: str | None = None, verbose: bool = Fals
         conn.add_log_listener(lambda _c, msg: print(f"    {msg.message}"))
     applied = []
     try:
+        # Migration 008 backfills ownership to the seed admin. Pass its email and an
+        # argon2 hash (never the plain password) as session-local settings.
+        from app.config import settings
+        from app.security import hash_password
+
+        if settings.admin_email and settings.admin_password:
+            await conn.execute("SELECT set_config('app.seed_admin_email', $1, false)", settings.admin_email)
+            await conn.execute(
+                "SELECT set_config('app.seed_admin_password_hash', $1, false)", hash_password(settings.admin_password)
+            )
         for path in migration_files():
             if verbose:
                 print(f"applying {path.name}")

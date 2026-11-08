@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 from datetime import datetime, date, time, timezone
-from sqlalchemy import text, String, Text, Date, DateTime, Time, ForeignKey, JSON, Float, Boolean, Index, false, func
+from sqlalchemy import CheckConstraint, text, String, Text, Date, DateTime, Time, ForeignKey, JSON, Float, Boolean, Index, false, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -13,6 +13,19 @@ def utcnow() -> datetime:
 
 def gen_uuid() -> str:
     return str(uuid.uuid4())
+
+
+class User(Base):
+    """An app user. "rep" = field representative; managers read everyone's data; admins manage the app."""
+    __tablename__ = "users"
+    __table_args__ = (CheckConstraint("role IN ('rep', 'manager', 'admin')", name="ck_users_role"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)  # argon2
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class HCP(Base):
@@ -38,6 +51,7 @@ class Interaction(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     hcp_id: Mapped[str] = mapped_column(String(36), ForeignKey("hcps.id"), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
 
     interaction_type: Mapped[str] = mapped_column(String(50), default="Visit")  # Visit/Call/Email/Sample Drop/Conference
     channel: Mapped[str] = mapped_column(String(20), default="form")  # "form" or "chat"
@@ -63,6 +77,8 @@ class Interaction(Base):
     voice_note_consent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     # Product names the chat agent mentioned that match no catalog product (catalog is admin-only).
     unmatched_products: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("'[]'::json"))
+    # Chat fuzzy matches: [{"field": "products_discussed"|"samples_dropped", "product": catalog name, "from": rep's text}]
+    product_matches: Mapped[list] = mapped_column(JSON, nullable=False, default=list, server_default=text("'[]'::json"))
 
     compliance_flag: Mapped[bool] = mapped_column(Boolean, default=False)
     compliance_notes: Mapped[str] = mapped_column(Text, nullable=True)
@@ -80,6 +96,7 @@ class FollowUp(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     hcp_id: Mapped[str] = mapped_column(String(36), ForeignKey("hcps.id"), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     interaction_id: Mapped[str] = mapped_column(String(36), ForeignKey("interactions.id"), nullable=True)
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
@@ -93,6 +110,7 @@ class ChatMessage(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     session_id: Mapped[str] = mapped_column(String(36), index=True)
+    owner_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(20))  # user/assistant/tool
     content: Mapped[str] = mapped_column(Text)
     tool_name: Mapped[str] = mapped_column(String(50), nullable=True)
@@ -130,3 +148,6 @@ class Product(Base):
 
 
 Index("uq_products_name_lower", func.lower(Product.name), unique=True)
+
+
+Index("uq_users_email_lower", func.lower(User.email), unique=True)

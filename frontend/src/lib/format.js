@@ -21,3 +21,9 @@ export function hcpDisplayName(name) {
   if (!n) return ''
   return /^dr\.?\s/i.test(n) ? n : `Dr. ${n}`
 }
+
+/** Catalog names with the rep's original text for fuzzy chat matches: "CardioMax (from 'cardiomx')". */
+export function withOriginal(name, field, matches) {
+  const m = (matches || []).find((x) => x.field === field && x.product === name)
+  return m ? `${name} (from '${m.from}')` : name
+}

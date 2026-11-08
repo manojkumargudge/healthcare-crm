@@ -11,6 +11,7 @@ import pytest
 
 from app.agent.tools import STATE_SAMPLE_LIMITS, build_tools
 from app.models import HCP
+from tests.conftest import ADMIN_AUTHZ
 
 
 class _FakeSession:
@@ -24,7 +25,7 @@ class _FakeSession:
 
 async def _check(state: str | None, samples: Any, *, raw: bool = False) -> dict[str, Any]:
     hcp = HCP(id="hcp-1", name="Dr. Unit", state=state)
-    tool = next(t for t in build_tools(_FakeSession(hcp)) if t.name == "check_sample_compliance")  # type: ignore[arg-type]  # duck-typed fake stands in for AsyncSession (only .get is used)
+    tool = next(t for t in build_tools(_FakeSession(hcp), ADMIN_AUTHZ) if t.name == "check_sample_compliance")  # type: ignore[arg-type]  # duck-typed fake stands in for AsyncSession (only .get is used)
     payload = samples if raw else json.dumps(samples)
     out = await tool.coroutine(hcp_id="hcp-1", samples_dropped=payload)  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     return json.loads(out)
@@ -101,7 +102,7 @@ async def test_invalid_json_returns_error() -> None:
 
 
 async def test_unknown_hcp_returns_error() -> None:
-    tool = next(t for t in build_tools(_FakeSession()) if t.name == "check_sample_compliance")  # type: ignore[arg-type]  # duck-typed fake stands in for AsyncSession (only .get is used)
+    tool = next(t for t in build_tools(_FakeSession(), ADMIN_AUTHZ) if t.name == "check_sample_compliance")  # type: ignore[arg-type]  # duck-typed fake stands in for AsyncSession (only .get is used)
     out = json.loads(await tool.coroutine(hcp_id="nope", samples_dropped="[]"))  # type: ignore[misc]  # StructuredTool.coroutine is Optional; always set by build_tools
     assert out == {"error": "No HCP found with id nope"}
 

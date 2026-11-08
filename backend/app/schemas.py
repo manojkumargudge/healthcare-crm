@@ -99,6 +99,8 @@ class InteractionOut(BaseModel):
     voice_note_consent: bool = False
     voice_note_consent_at: Optional[datetime] = None
     unmatched_products: list = []
+    product_matches: list = []
+    owner_id: str
     compliance_flag: bool
     compliance_notes: Optional[str] = None
     created_at: datetime
@@ -115,6 +117,51 @@ class MaterialOut(BaseModel):
     id: str
     name: str
     approved: bool
+
+
+class ProductCreate(BaseModel):
+    name: Name
+
+
+class MaterialApproval(BaseModel):
+    material: "MaterialOut"
+    interactions_rechecked: int
+    flags_cleared: int
+
+
+Email = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+]
+Password = Annotated[str, StringConstraints(min_length=12, max_length=256)]
+RoleName = Literal["rep", "manager", "admin"]
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    email: str
+    role: str
+    is_active: bool
+    created_at: datetime
+
+
+class UserCreate(BaseModel):
+    email: Email
+    password: Password
+    role: RoleName = "rep"
+
+
+class UserUpdate(BaseModel):
+    role: Optional[RoleName] = None
+    is_active: Optional[bool] = None
+    password: Optional[Password] = None
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserOut
 
 
 class ProductOut(BaseModel):
@@ -134,6 +181,7 @@ class FollowUpOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     hcp_id: str
+    owner_id: str
     interaction_id: Optional[str] = None
     due_date: date
     reason: str
