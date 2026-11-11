@@ -29,15 +29,24 @@ const row = (id, owner, extra = {}) => ({
 
 let routes
 let calls
+const repCounts = (rows) => {
+  const by = {}
+  for (const r of rows) by[r.owner_id] = { owner_id: r.owner_id, email: r.owner_email, count: (by[r.owner_id]?.count || 0) + 1 }
+  return Object.values(by).sort((a, b) => a.email.localeCompare(b.email))
+}
 function fakeFetch() {
   calls = []
   return vi.fn(async (url, opts = {}) => {
     const path = url.replace(/^https?:\/\/[^/]+/, '')
     calls.push({ path, opts })
     const handler = Object.entries(routes).find(([k]) => path.startsWith(k))?.[1]
-    const [status, body] = handler ? handler(path, opts) : [404, { detail: 'not found' }]
+    const [status, body, headers] = handler ? handler(path, opts) : [404, { detail: 'not found' }]
     const text = typeof body === 'string' ? body : JSON.stringify(body)
-    return { ok: status < 400, status, json: async () => JSON.parse(text), text: async () => text }
+    const hdrs = headers ? headers(path) : {}
+    return {
+      ok: status < 400, status, json: async () => JSON.parse(text), text: async () => text,
+      headers: { get: (k) => hdrs[k.toLowerCase()] ?? null },
+    }
   })
 }
 
@@ -47,7 +56,15 @@ function setup(user, { demo = false, interactions = [], extra = {} } = {}) {
     '/api/meta': () => [200, { demo_mode: demo, llm_daily_cap: 500 }],
     '/auth/login': () => [200, { access_token: 't', token_type: 'bearer', expires_in: 900, user }],
     '/api/hcps': () => [200, [{ id: 'h1', name: 'Dr. A', specialty: 'Cardiology' }]],
-    '/api/interactions': () => [200, interactions],
+    // Like the server: owner_id filter, limit/offset paging, total in X-Total-Count.
+    '/api/interactions/reps': () => [200, repCounts(interactions)],
+    '/api/interactions': (path) => {
+      const q = new URL(path, 'http://x').searchParams
+      const rows = interactions.filter((i) => !q.get('owner_id') || i.owner_id === q.get('owner_id'))
+      const offset = Number(q.get('offset') || 0)
+      const page = rows.slice(offset, offset + Number(q.get('limit') || 25))
+      return [200, page, () => ({ 'x-total-count': String(rows.length) })]
+    },
     '/api/admin/materials/pending': () => [200, []],
     '/api/products': () => [200, []],
     '/api/admin/reps': () => [200, Object.values(USERS)],
@@ -173,10 +190,12 @@ describe('Rep line and filter on Interactions', () => {
     expect([...filter.options].map((o) => o.textContent)).toEqual([
       'All reps (4)', 'demo-admin@example.com (1)', 'demo-manager@example.com (1)', 'demo-rep@example.com (2)',
     ])
-    fireEvent.change(filter, { target: { value: 'demo-rep@example.com' } })
+    await act(async () => { fireEvent.change(filter, { target: { value: USERS.rep.id } }) })
     expect(screen.getAllByText('Rep: demo-rep@example.com')).toHaveLength(2)
     expect(screen.queryByText('Rep: demo-manager@example.com')).toBeNull()
-    fireEvent.change(filter, { target: { value: '' } })
+    // The filter runs on the server, not by hiding rows in the browser.
+    expect(calls.some((c) => c.path.includes(`owner_id=${USERS.rep.id}`))).toBe(true)
+    await act(async () => { fireEvent.change(filter, { target: { value: '' } }) })
     expect(screen.getAllByText(/^Rep: /)).toHaveLength(4)
   })
 
@@ -186,6 +205,19 @@ describe('Rep line and filter on Interactions', () => {
     await signIn()
     expect(await screen.findByLabelText('Rep')).toBeTruthy()
     expect(screen.getAllByText(/^Rep: /)).toHaveLength(4)
+  })
+
+  it('shows 25 at a time and loads the next page on "Load more"', async () => {
+    const many = Array.from({ length: 30 }, (_, n) => row(`r${n}`, USERS.rep))
+    setup(USERS.manager, { interactions: many })
+    renderApp()
+    await signIn()
+    await screen.findByText('Showing 25 of 30')
+    expect(screen.getAllByText(/^Rep: /)).toHaveLength(25)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Load more' })) })
+    expect(screen.getAllByText(/^Rep: /)).toHaveLength(30)
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull()
+    expect(calls.some((c) => c.path.includes('offset=25'))).toBe(true)
   })
 
   it('reps see neither (they only have their own interactions)', async () => {

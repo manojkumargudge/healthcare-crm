@@ -93,6 +93,10 @@ export default function StructuredForm() {
   const [outcomes, setOutcomes] = useState('')
   const [followUpActions, setFollowUpActions] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // New materials are created via the API before they become chips; block submit until
+  // every such save has finished, or the interaction would be logged without them.
+  const [savingMaterials, setSavingMaterials] = useState(0)
+  const onMaterialBusy = useCallback((busy) => setSavingMaterials((n) => Math.max(0, n + (busy ? 1 : -1))), [])
   const [result, setResult] = useState(null)
 
   const searchAttendees = useCallback(
@@ -136,7 +140,7 @@ export default function StructuredForm() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!hcpId) return
+    if (!hcpId || savingMaterials > 0) return
     setSubmitting(true)
     setResult(null)
     try {
@@ -253,6 +257,7 @@ export default function StructuredForm() {
                 onChange={setMaterials}
                 search={searchMaterials}
                 onCreate={createMaterial}
+                onBusyChange={onMaterialBusy}
                 placeholder="Search materials or add a new one"
                 createLabel={(q) => `Add "${q}" to materials`}
               />
@@ -359,8 +364,8 @@ export default function StructuredForm() {
 
         <FollowUpSuggestions interactionId={result?.id} />
 
-        <button className="btn-primary" type="submit" disabled={!hcpId || submitting}>
-          {submitting ? 'Logging…' : 'Log Interaction'}
+        <button className="btn-primary" type="submit" disabled={!hcpId || submitting || savingMaterials > 0}>
+          {submitting ? 'Logging…' : savingMaterials > 0 ? 'Saving material…' : 'Log Interaction'}
         </button>
 
         {result?.error && <p className="form-error">{result.error}</p>}

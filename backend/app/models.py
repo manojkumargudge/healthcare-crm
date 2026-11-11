@@ -48,6 +48,9 @@ class HCP(Base):
 class Interaction(Base):
     """A single logged HCP interaction (visit, call, email, sample drop, etc.)."""
     __tablename__ = "interactions"
+    # Serves the paged history list: one HCP's interactions, newest first
+    # (Postgres scans the index backwards for the DESC order).
+    __table_args__ = (Index("ix_interactions_hcp_date", "hcp_id", "interaction_date", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     hcp_id: Mapped[str] = mapped_column(String(36), ForeignKey("hcps.id"), nullable=False)

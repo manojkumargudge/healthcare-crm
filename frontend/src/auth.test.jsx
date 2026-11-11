@@ -162,7 +162,7 @@ describe('history edit rules match the API', () => {
   ]
   const storeFor = (user) => {
     const s = createAppStore({ auth: { token: 't', user, status: 'succeeded', error: null, notice: null } })
-    s.dispatch({ type: 'interactions/fetch/fulfilled', payload: rows })
+    s.dispatch({ type: 'interactions/fetch/fulfilled', payload: { items: rows, total: rows.length, reps: [] } })
     return s
   }
 

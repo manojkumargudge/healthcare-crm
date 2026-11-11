@@ -1341,6 +1341,13 @@ textarea{
   border-bottom:1px solid var(--border);
   font-size:14px;
 }
+.history-more{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding-top:14px;
+}
 .history-filter label{
   font-weight:600;
 }

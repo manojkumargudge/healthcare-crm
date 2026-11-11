@@ -1,29 +1,27 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { editInteraction } from "../store/interactionsSlice";
+import { editInteraction, fetchInteractions, fetchMoreInteractions } from "../store/interactionsSlice";
 import { formatScore, sentimentClass, withOriginal } from "../lib/format";
 
 
 export default function InteractionHistory() {
   const dispatch = useDispatch();
 
-  const items = useSelector((s) => s.interactions.items);
+  const list = useSelector((s) => s.interactions);
+  const items = list.items;
+  const { total = items.length, reps = [], hcpId = null, ownerId = null, loadingMore = false } = list;
   const user = useSelector((s) => s.auth?.user);
 
   const [editingId, setEditingId] = useState(null);
   const [draftNotes, setDraftNotes] = useState("");
   const [editError, setEditError] = useState("");
-  const [repFilter, setRepFilter] = useState("");
 
   // Managers and admins see everyone's interactions, so show whose each one is and
-  // let them filter by rep. Reps only ever see their own rows.
+  // let them filter by rep. Reps only ever see their own rows. Filtering and paging
+  // run on the server; the counts come from GET /api/interactions/reps.
   const seesAllReps = user?.role === "manager" || user?.role === "admin";
-  const reps = useMemo(
-    () => [...new Set(items.map((i) => i.owner_email).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-    [items]
-  );
-  const activeFilter = seesAllReps && reps.includes(repFilter) ? repFilter : "";
-  const visible = activeFilter ? items.filter((i) => i.owner_email === activeFilter) : items;
+  const allCount = reps.reduce((n, r) => n + r.count, 0);
+  const setRepFilter = (value) => dispatch(fetchInteractions({ hcpId, ownerId: value || null }));
 
   // Same rule as the API: admins edit anything; everyone else only their own rows
   // (managers can read other reps' interactions but not change them).
@@ -54,7 +52,7 @@ export default function InteractionHistory() {
     }
   };
 
-  if (items.length === 0) {
+  if (items.length === 0 && !ownerId) {
     return (
       <div className="history-card">
         <div className="empty-state">
@@ -70,18 +68,18 @@ export default function InteractionHistory() {
       {seesAllReps && (
         <div className="history-filter">
           <label htmlFor="rep-filter">Rep</label>
-          <select id="rep-filter" value={activeFilter} onChange={(e) => setRepFilter(e.target.value)}>
-            <option value="">All reps ({items.length})</option>
-            {reps.map((email) => (
-              <option key={email} value={email}>
-                {email} ({items.filter((i) => i.owner_email === email).length})
+          <select id="rep-filter" value={ownerId || ""} onChange={(e) => setRepFilter(e.target.value)}>
+            <option value="">All reps ({allCount})</option>
+            {reps.map((r) => (
+              <option key={r.owner_id} value={r.owner_id}>
+                {r.email} ({r.count})
               </option>
             ))}
           </select>
         </div>
       )}
 
-      {visible.map((item) => (
+      {items.map((item) => (
 
         <div
           className="history-item"
@@ -275,6 +273,20 @@ export default function InteractionHistory() {
         </div>
 
       ))}
+
+      {items.length < total && (
+        <div className="history-more">
+          <span className="empty-note">Showing {items.length} of {total}</span>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={loadingMore}
+            onClick={() => dispatch(fetchMoreInteractions())}
+          >
+            {loadingMore ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
 
     </div>
   );

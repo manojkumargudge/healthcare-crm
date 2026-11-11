@@ -2,8 +2,8 @@ import json
 from collections.abc import Sequence
 from datetime import date as date_cls
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.tools import apply_compliance, build_tools
@@ -19,7 +19,7 @@ from app.database import get_db
 from app.follow_ups import list_follow_ups, suggest_follow_ups
 from app.models import HCP, Interaction, User, utcnow
 from app.ratelimit import llm_rate_limit
-from app.schemas import FollowUpOut, InteractionCreate, InteractionOut, InteractionUpdate
+from app.schemas import FollowUpOut, InteractionCreate, InteractionOut, InteractionUpdate, RepCount
 
 router = APIRouter(prefix="/api/interactions", tags=["Interactions"])
 
@@ -37,15 +37,49 @@ async def interactions_out(db: AsyncSession, interactions: Sequence[Interaction]
     ]
 
 
+PAGE_SIZE_DEFAULT = 25
+PAGE_SIZE_MAX = 100
+
+
 @router.get("", response_model=list[InteractionOut])
 async def list_interactions(
-    hcp_id: str | None = None, authz: Authz = Depends(get_authz), db: AsyncSession = Depends(get_db)
+    response: Response,
+    hcp_id: str | None = None,
+    owner_id: str | None = Query(None, description="Only this rep's interactions (managers/admins)"),
+    limit: int = Query(PAGE_SIZE_DEFAULT, ge=1, le=PAGE_SIZE_MAX),
+    offset: int = Query(0, ge=0),
+    authz: Authz = Depends(get_authz),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Reps see their own interactions; managers and admins see everyone's."""
-    stmt = authz.read_filter(select(Interaction), Interaction).order_by(Interaction.interaction_date.desc())
+    """Newest first, one page at a time; the total matching count is in X-Total-Count.
+    Reps see their own interactions; managers and admins see everyone's."""
+    stmt = authz.read_filter(select(Interaction), Interaction)
     if hcp_id:
         stmt = stmt.where(Interaction.hcp_id == hcp_id)
-    return await interactions_out(db, (await db.execute(stmt)).scalars().all())
+    if owner_id:
+        stmt = stmt.where(Interaction.owner_id == owner_id)
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+    response.headers["X-Total-Count"] = str(total)
+    # created_at and id break ties so pages never overlap or skip rows on the same date.
+    page = stmt.order_by(
+        Interaction.interaction_date.desc(), Interaction.created_at.desc(), Interaction.id.desc()
+    ).limit(limit).offset(offset)
+    return await interactions_out(db, (await db.execute(page)).scalars().all())
+
+
+@router.get("/reps", response_model=list[RepCount])
+async def list_interaction_reps(
+    hcp_id: str | None = None, authz: Authz = Depends(get_authz), db: AsyncSession = Depends(get_db)
+):
+    """Reps with visible interactions (optionally for one HCP) and how many each, for the rep filter."""
+    stmt = authz.read_filter(
+        select(User.id, User.email, func.count(Interaction.id)).join(User, User.id == Interaction.owner_id),
+        Interaction,
+    )
+    if hcp_id:
+        stmt = stmt.where(Interaction.hcp_id == hcp_id)
+    rows = await db.execute(stmt.group_by(User.id, User.email).order_by(func.lower(User.email)))
+    return [RepCount(owner_id=uid, email=email, count=n) for uid, email, n in rows.all()]
 
 
 @router.post("", response_model=InteractionOut, status_code=201)

@@ -82,7 +82,8 @@ The Log Interaction screen follows the brief mockup ([`docs/brief-mockup.png`](d
 | GET | `/api/hcps?q=` | List HCPs; `q` searches name, specialty and institution (attendee picker) |
 | POST | `/api/hcps` | Create an HCP |
 | GET | `/api/hcps/{hcp_id}` | Get one HCP |
-| GET | `/api/interactions?hcp_id=` | List interactions, optionally for one HCP |
+| GET | `/api/interactions?hcp_id=&owner_id=&limit=&offset=` | One page of interactions, newest first (default 25, max 100); total in the `X-Total-Count` header. `owner_id` filters by rep |
+| GET | `/api/interactions/reps?hcp_id=` | Reps with visible interactions and how many each (for the manager/admin rep filter) |
 | POST | `/api/interactions` | Create from the form; runs compliance before saving |
 | PATCH | `/api/interactions/{interaction_id}` | Edit an interaction |
 | GET | `/api/interactions/{interaction_id}` | Get one interaction |

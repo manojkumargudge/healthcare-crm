@@ -76,6 +76,12 @@ class InteractionUpdate(BaseModel):
     edit_reason: Optional[str] = None
 
 
+class RepCount(BaseModel):
+    owner_id: str
+    email: str
+    count: int
+
+
 class InteractionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
