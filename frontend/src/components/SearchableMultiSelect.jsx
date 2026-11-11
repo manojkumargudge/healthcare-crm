@@ -10,6 +10,8 @@ import { useEffect, useRef, useState } from 'react'
  *   allowCreate           Enter on text with no exact match adds it as typed
  *   onCreate(name) -> Promise<string | {value, badge?}>  optional; returns the canonical entry
  *   createLabel(q)        text for the "add new" option
+ *   onBusyChange(busy)    optional; told when an onCreate call starts/ends, so a parent
+ *                         form can block submit until the new entry is saved
  */
 const normalize = (o) => (typeof o === 'string' ? { value: o } : o)
 
@@ -23,12 +25,15 @@ export default function SearchableMultiSelect({
   onCreate,
   createLabel = (q) => `Add "${q}"`,
   debounceMs = 200,
+  onBusyChange,
 }) {
   const [query, setQuery] = useState('')
   const [options, setOptions] = useState([]) // [{value, badge?}]
   const [badges, setBadges] = useState({}) // value -> badge, remembered for chips
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState('')
   const requestId = useRef(0)
   const rootRef = useRef(null)
 
@@ -76,8 +81,22 @@ export default function SearchableMultiSelect({
   }, [q, open, search, debounceMs])
 
   const add = async (item) => {
+    if (creating) return
     let entry = { value: item.value, badge: item.badge }
-    if (item.create && onCreate) entry = normalize(await onCreate(item.value))
+    if (item.create && onCreate) {
+      setCreating(true)
+      setCreateError('')
+      onBusyChange?.(true)
+      try {
+        entry = normalize(await onCreate(item.value))
+      } catch (err) {
+        setCreateError(`Couldn’t add "${item.value}": ${err?.message || 'request failed'}`)
+        return
+      } finally {
+        setCreating(false)
+        onBusyChange?.(false)
+      }
+    }
     remember([entry])
     const name = entry.value
     if (name && !values.some((v) => v.toLowerCase() === name.toLowerCase())) onChange([...values, name])
@@ -129,6 +148,8 @@ export default function SearchableMultiSelect({
           aria-controls={listId}
           aria-autocomplete="list"
           value={query}
+          readOnly={creating}
+          aria-busy={creating}
           placeholder={values.length ? '' : placeholder}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); setActive(0) }}
           onFocus={() => setOpen(true)}
@@ -153,6 +174,8 @@ export default function SearchableMultiSelect({
           ))}
         </ul>
       )}
+      {creating && <p className="empty-note" role="status">Saving new entry…</p>}
+      {createError && <p className="form-error" role="alert">{createError}</p>}
     </div>
   )
 }

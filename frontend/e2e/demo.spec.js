@@ -99,7 +99,8 @@ test('managers see the Rep on each interaction and can filter by rep', async ({ 
   const row = page.locator('.history-item', { hasText: id })
   await expect(row).toContainText(`Rep: ${USERS.rep}`)
   const filter = page.getByLabel('Rep', { exact: true })
-  await filter.selectOption(USERS.rep)
+  // Options are labelled "email (count)" with the rep's id as the value.
+  await filter.selectOption(await filter.locator('option', { hasText: USERS.rep }).getAttribute('value'))
   await expect(row).toBeVisible()
   await expect(page.locator('.history-rep').filter({ hasNotText: USERS.rep })).toHaveCount(0)
   await filter.selectOption({ index: 0 }) // All reps

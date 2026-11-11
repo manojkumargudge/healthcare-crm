@@ -6,6 +6,7 @@ vi.mock('../api/client', () => ({
   api: {
     listHcps: vi.fn(),
     listInteractions: vi.fn(),
+    listInteractionReps: vi.fn(),
     createInteraction: vi.fn(),
     updateInteraction: vi.fn(),
     chatTurn: vi.fn(),
@@ -44,13 +45,14 @@ describe('hcpSlice', () => {
 
 describe('interactionsSlice', () => {
   it('fetches, prepends a submitted interaction, and replaces an edited one', async () => {
-    api.listInteractions.mockResolvedValue([{ id: 'i1', raw_notes: 'old' }])
-    api.createInteraction.mockResolvedValue({ id: 'i2', raw_notes: 'new' })
+    api.listInteractions.mockResolvedValue({ items: [{ id: 'i1', hcp_id: 'h1', raw_notes: 'old' }], total: 1 })
+    api.createInteraction.mockResolvedValue({ id: 'i2', hcp_id: 'h1', raw_notes: 'new' })
     api.updateInteraction.mockResolvedValue({ id: 'i1', raw_notes: 'edited' })
     const store = makeStore(interactionsReducer)
 
     await store.dispatch(fetchInteractions('h1'))
-    expect(api.listInteractions).toHaveBeenCalledWith('h1')
+    expect(api.listInteractions).toHaveBeenCalledWith('h1', { ownerId: null })
+    expect(api.listInteractionReps).not.toHaveBeenCalled() // no signed-in manager in this store
 
     await store.dispatch(submitStructuredInteraction({ hcp_id: 'h1' }))
     expect(store.getState().s.items.map((i) => i.id)).toEqual(['i2', 'i1'])

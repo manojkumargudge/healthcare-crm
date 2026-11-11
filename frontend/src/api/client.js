@@ -36,7 +36,7 @@ async function parseError(res) {
   return err
 }
 
-async function send(path, { headers = {}, auth = true, ...options } = {}) {
+async function request(path, { headers = {}, auth = true, ...options } = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: { ...(auth && authToken ? { Authorization: `Bearer ${authToken}` } : {}), ...headers },
@@ -45,7 +45,25 @@ async function send(path, { headers = {}, auth = true, ...options } = {}) {
     onUnauthorized()
   }
   if (!res.ok) throw await parseError(res)
+  return res
+}
+
+async function send(path, options) {
+  const res = await request(path, options)
   return res.status === 204 ? null : res.json()
+}
+
+export const INTERACTIONS_PAGE_SIZE = 25
+
+/** One page of interactions, newest first: { items, total }. */
+async function listInteractions(hcpId, { ownerId, offset = 0, limit = INTERACTIONS_PAGE_SIZE } = {}) {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (hcpId) params.set('hcp_id', hcpId)
+  if (ownerId) params.set('owner_id', ownerId)
+  const res = await request(`/api/interactions?${params}`)
+  const items = await res.json()
+  const header = res.headers?.get?.('X-Total-Count')
+  return { items, total: header == null ? offset + items.length : Number(header) }
 }
 
 const json = (path, method = 'GET', body) =>
@@ -69,7 +87,8 @@ export const api = {
 
   listHcps: () => json('/api/hcps'),
   createHcp: (data) => json('/api/hcps', 'POST', data),
-  listInteractions: (hcpId) => json(`/api/interactions${hcpId ? `?hcp_id=${hcpId}` : ''}`),
+  listInteractions,
+  listInteractionReps: (hcpId) => json(`/api/interactions/reps${hcpId ? `?hcp_id=${encodeURIComponent(hcpId)}` : ''}`),
   createInteraction: (data) => json('/api/interactions', 'POST', data),
   updateInteraction: (id, data) => json(`/api/interactions/${id}`, 'PATCH', data),
   chatTurn: (data) => json('/api/chat/turn', 'POST', data),

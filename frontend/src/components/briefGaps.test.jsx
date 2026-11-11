@@ -80,7 +80,7 @@ describe('null sentiment_score in the UI', () => {
 
   it('InteractionHistory shows "Score —" for a null score', () => {
     const store = makeStore()
-    store.dispatch({ type: 'interactions/fetch/fulfilled', payload: rows })
+    store.dispatch({ type: 'interactions/fetch/fulfilled', payload: { items: rows, total: rows.length, reps: [] } })
     renderWithStore(<InteractionHistory />, store)
     expect(screen.getByText('Score —')).toBeTruthy()
     expect(screen.getByText('Score +0.70')).toBeTruthy()
